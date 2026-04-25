@@ -36,7 +36,12 @@
 
             <label class="check-row">
                 <input type="checkbox" @bind="_showThinking" />
-                <span>显示思考与工具流</span>
+                <span>显示思考</span>
+            </label>
+
+            <label class="check-row">
+                <input type="checkbox" @bind="_showToolStream" />
+                <span>显示工具流</span>
             </label>
         </div>
 
@@ -123,7 +128,7 @@
                                         var text = ExtractText(message);
                                         var thinking = _showThinking && IsAssistantRole(message) ? ExtractThinking(message) : null;
                                         var images = ExtractImages(message);
-                                        var toolCards = ExtractToolCards(message);
+                                        var toolCards = _showToolStream ? ExtractToolCards(message) : [];
                                         var canCopyMarkdown = IsAssistantRole(message) && !string.IsNullOrWhiteSpace(text);
                                         if (text is null && thinking is null && images.Count == 0 && toolCards.Count == 0)
                                         {
@@ -258,10 +263,11 @@
                         <label class="field chat-compose__field">
                             <span>消息</span>
                             <textarea
+                                @ref="_chatComposerRef"
                                 @bind="_chatMessage"
+                                @bind:event="oninput"
                                 rows="4"
                                 disabled="@(!_connected)"
-                                @onkeydown="OnComposerKeyDown"
                                 placeholder="@GetComposerPlaceholder()"></textarea>
                         </label>
                         <div class="chat-compose__actions">
@@ -275,7 +281,7 @@
                                 @onclick="@(CanAbort ? AbortAsync : NewSessionAsync)">
                                 @(CanAbort ? "停止" : "新会话")
                             </button>
-                            <button class="btn primary" disabled="@(!_connected)" @onclick="SendAsync">
+                            <button class="btn primary" @ref="_chatSubmitButtonRef" disabled="@(!_connected)" @onclick="SendAsync">
                                 @(IsBusy ? "排队" : "发送")
                             </button>
                         </div>

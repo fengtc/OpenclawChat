@@ -64,6 +64,7 @@ public partial class Index : ComponentBase, IDisposable
     private long? _chatStreamStartedAt;
     private string? _chatThinkingLevel;
     private bool _showThinking = true;
+    private bool _showToolStream = true;
     private bool _useStreaming = true;
     private readonly bool _useGatewayEventStreaming = false;
 
@@ -75,6 +76,9 @@ public partial class Index : ComponentBase, IDisposable
     private bool _pendingScrollForce;
     private bool _pendingScrollSmooth;
     private ElementReference _chatThreadRef;
+    private ElementReference _chatComposerRef;
+    private ElementReference _chatSubmitButtonRef;
+    private bool _pendingComposerFocus;
 
     private bool _sidebarOpen;
     private string? _sidebarContent;
@@ -118,6 +122,18 @@ public partial class Index : ComponentBase, IDisposable
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("openclawChat.bindComposerSubmit", _chatComposerRef, _chatSubmitButtonRef);
+            }
+            catch (JSException)
+            {
+                // The browser may still have an older chatInterop.js cached.
+            }
+        }
+
         if (_pendingScroll)
         {
             var force = _pendingScrollForce;
@@ -126,6 +142,12 @@ public partial class Index : ComponentBase, IDisposable
             _pendingScrollForce = false;
             _pendingScrollSmooth = false;
             await PerformAutoScrollAsync(force, smooth);
+        }
+
+        if (_pendingComposerFocus)
+        {
+            _pendingComposerFocus = false;
+            await FocusComposerAsync();
         }
 
         await base.OnAfterRenderAsync(firstRender);
@@ -336,6 +358,7 @@ public partial class Index : ComponentBase, IDisposable
 
     private async Task SendAsync()
     {
+        await SyncComposerValueAsync();
         await HandleSendChatAsync();
     }
 
@@ -575,6 +598,7 @@ public partial class Index : ComponentBase, IDisposable
             _chatSending = false;
             _waitingForAssistantReply = false;
             _activeWaitingRound = null;
+            ScheduleComposerFocus();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -869,16 +893,6 @@ public partial class Index : ComponentBase, IDisposable
         _attachments.RemoveAll((attachment) => attachment.Id == attachmentId);
     }
 
-    private async Task OnComposerKeyDown(KeyboardEventArgs args)
-    {
-        if (!string.Equals(args.Key, "Enter", StringComparison.Ordinal) || args.ShiftKey)
-        {
-            return;
-        }
-
-        await SendAsync();
-    }
-
     private string GetComposerPlaceholder()
     {
         if (!_connected)
@@ -933,6 +947,45 @@ public partial class Index : ComponentBase, IDisposable
         _pendingScroll = true;
         _pendingScrollForce = _pendingScrollForce || force;
         _pendingScrollSmooth = _pendingScrollSmooth || smooth;
+    }
+
+    private void ScheduleComposerFocus()
+    {
+        if (!_connected)
+        {
+            return;
+        }
+
+        _pendingComposerFocus = true;
+    }
+
+    private async Task FocusComposerAsync()
+    {
+        if (!_connected)
+        {
+            return;
+        }
+
+        try
+        {
+            await _chatComposerRef.FocusAsync(preventScroll: true);
+        }
+        catch
+        {
+            // The composer can be unavailable during reconnects or page teardown.
+        }
+    }
+
+    private async Task SyncComposerValueAsync()
+    {
+        try
+        {
+            _chatMessage = await JS.InvokeAsync<string>("openclawChat.getValue", _chatComposerRef);
+        }
+        catch (JSException)
+        {
+            // Keep the current bound value if the browser-side helper is unavailable.
+        }
     }
 
     private async Task PerformAutoScrollAsync(bool force, bool smooth)
@@ -1022,6 +1075,7 @@ public partial class Index : ComponentBase, IDisposable
             {
                 ResetToolStream();
                 await FlushChatQueueAsync();
+                ScheduleComposerFocus();
 
                 var runId = args.Payload.RunId;
                 if (!string.IsNullOrWhiteSpace(runId) && _refreshSessionsAfterChat.Contains(runId))
@@ -1725,7 +1779,7 @@ public partial class Index : ComponentBase, IDisposable
                 continue;
             }
 
-            if (!_showThinking && NormalizeRoleForGrouping(GetRole(message)) == "tool")
+            if (!_showToolStream && NormalizeRoleForGrouping(GetRole(message)) == "tool")
             {
                 continue;
             }
@@ -1733,7 +1787,7 @@ public partial class Index : ComponentBase, IDisposable
             items.Add(new ChatMessageItem { Message = message });
         }
 
-        if (_showThinking)
+        if (_showToolStream)
         {
             foreach (var message in _chatToolMessages)
             {

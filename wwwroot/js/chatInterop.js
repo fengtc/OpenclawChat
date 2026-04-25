@@ -20,5 +20,38 @@ window.openclawChat = window.openclawChat || {
     }
 
     element.scrollTop = element.scrollHeight;
+  },
+
+  getValue: function (element) {
+    return element ? element.value : "";
+  },
+
+  bindComposerSubmit: function (element, submitButton) {
+    if (!element) {
+      return;
+    }
+
+    if (element.__openclawComposerSubmit) {
+      element.__openclawComposerSubmit.dispose();
+    }
+
+    const onKeyDown = function (event) {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+        return;
+      }
+
+      event.preventDefault();
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      if (submitButton && typeof submitButton.click === "function") {
+        submitButton.click();
+      }
+    };
+
+    element.addEventListener("keydown", onKeyDown);
+    element.__openclawComposerSubmit = {
+      dispose: function () {
+        element.removeEventListener("keydown", onKeyDown);
+      }
+    };
   }
 };
