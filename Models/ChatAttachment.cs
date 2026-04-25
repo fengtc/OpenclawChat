@@ -1,4 +1,4 @@
-namespace OpenclawWebChat.Models;
+namespace OpenclawChat.Models;
 
 public sealed class ChatAttachment
 {

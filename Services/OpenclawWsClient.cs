@@ -4,9 +4,9 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using OpenclawWebChat.Models;
+using OpenclawChat.Models;
 
-namespace OpenclawWebChat.Services;
+namespace OpenclawChat.Services;
 
 public sealed class OpenclawWsClient : IAsyncDisposable
 {

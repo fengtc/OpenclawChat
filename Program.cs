@@ -1,5 +1,5 @@
-using OpenclawWebChat.Services;
-using OpenclawWebChat.Models;
+using OpenclawChat.Services;
+using OpenclawChat.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace OpenclawWebChat.Services;
+namespace OpenclawChat.Services;
 
 public sealed class ConnectionStateChangedEventArgs : EventArgs
 {

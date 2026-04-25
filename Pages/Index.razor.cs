@@ -6,10 +6,10 @@ using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Options;
 using Microsoft.JSInterop;
-using OpenclawWebChat.Models;
-using OpenclawWebChat.Services;
+using OpenclawChat.Models;
+using OpenclawChat.Services;
 
-namespace OpenclawWebChat.Pages;
+namespace OpenclawChat.Pages;
 
 public partial class Index : ComponentBase, IDisposable
 {
