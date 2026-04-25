@@ -48,7 +48,7 @@
         <div class="config-actions">
             <button @onclick="ConnectAsync" disabled="@(_connecting || _connected)">@(_connected ? "已连接" : (_connecting ? "连接中..." : "连接"))</button>
             <button class="ghost" @onclick="DisconnectAsync" disabled="@(!_connected)">断开</button>
-            <button class="ghost" @onclick="RefreshSessionsAsync" disabled="@(!_connected || _loadingSessions)">@(_loadingSessions ? "会话加载中..." : "刷新会话")</button>
+            <button class="ghost" @onclick="NewSessionAsync" disabled="@(!_connected || IsBusy)">新会话</button>
             <button class="ghost" @onclick="ManualRefreshAsync" disabled="@(!_connected || _chatLoading)">@(_chatLoading ? "加载中..." : "刷新")</button>
         </div>
 
@@ -260,30 +260,29 @@
                     }
 
                     <div class="chat-compose__row">
-                        <label class="field chat-compose__field">
-                            <span>消息</span>
+                        <div class="chat-composer-box">
                             <textarea
+                                class="chat-composer-box__textarea"
                                 @ref="_chatComposerRef"
                                 @bind="_chatMessage"
                                 @bind:event="oninput"
-                                rows="4"
+                                rows="3"
                                 disabled="@(!_connected)"
                                 placeholder="@GetComposerPlaceholder()"></textarea>
-                        </label>
-                        <div class="chat-compose__actions">
-                            <label class="btn ghost file-btn">
-                                图片
-                                <InputFile OnChange="OnAttachmentsSelectedAsync" accept="image/*" multiple />
-                            </label>
-                            <button
-                                class="btn"
-                                disabled="@(!_connected || (!CanAbort && _chatSending))"
-                                @onclick="@(CanAbort ? AbortAsync : NewSessionAsync)">
-                                @(CanAbort ? "停止" : "新会话")
-                            </button>
-                            <button class="btn primary" @ref="_chatSubmitButtonRef" disabled="@(!_connected)" @onclick="SendAsync">
-                                @(IsBusy ? "排队" : "发送")
-                            </button>
+                            <div class="chat-composer-box__toolbar">
+                                <label class="chat-composer-box__attach file-btn" title="添加图片" aria-label="添加图片">
+                                    <span class="chat-composer-box__attach-icon" aria-hidden="true">+</span>
+                                    <InputFile OnChange="OnAttachmentsSelectedAsync" accept="image/*" multiple />
+                                </label>
+                                <div class="chat-composer-box__spacer"></div>
+                                @if (CanAbort)
+                                {
+                                    <button class="btn ghost" type="button" @onclick="AbortAsync" disabled="@(!_connected)">停止</button>
+                                }
+                                <button class="btn primary chat-composer-box__send" @ref="_chatSubmitButtonRef" disabled="@(!_connected)" @onclick="SendAsync">
+                                    @(IsBusy ? "排队" : "发送")
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
