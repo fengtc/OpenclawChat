@@ -3,10 +3,19 @@
     display: grid;
     gap: 1.25rem;
     grid-template-columns: 340px minmax(0, 1fr);
+    grid-auto-rows: 1fr;
+    align-items: stretch;
     width: 100%;
     max-width: 1480px;
-    min-height: calc(100vh - 2.5rem);
+    height: calc(100vh - 2.5rem);
     margin: 0 auto;
+}
+
+.chat-grid > .panel {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .panel {
@@ -24,10 +33,6 @@
 /* ===== Config Panel ===== */
 .config-panel {
     padding: 1.25rem 1.25rem 1.5rem;
-    align-self: start;
-    position: sticky;
-    top: 1rem;
-    max-height: calc(100vh - 2.5rem);
     overflow-y: auto;
 }
 
@@ -89,6 +94,55 @@
     outline: none;
     border-color: #6366f1;
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.form-grid input:disabled,
+.form-grid select:disabled,
+.form-grid textarea:disabled {
+    background: #f1f5f9;
+    color: #64748b;
+    border-color: #e2e8f0;
+    cursor: not-allowed;
+}
+
+.input-reveal {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.input-reveal input {
+    padding-right: 2.4rem !important;
+    flex: 1;
+}
+
+.input-reveal__toggle {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    border: none;
+    box-shadow: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.input-reveal__toggle:hover:not(:disabled) {
+    background: #f1f5f9;
+    color: #1f2937;
+    box-shadow: none;
+}
+
+.input-reveal__toggle svg {
+    display: block;
 }
 
 .check-row {
@@ -205,7 +259,7 @@ button.primary:hover:not(:disabled),
 .conversation-panel {
     display: flex;
     flex-direction: column;
-    min-height: calc(100vh - 2.5rem);
+    min-height: 0;
 }
 
 .error-box {
@@ -240,9 +294,8 @@ button.primary:hover:not(:disabled),
 .chat-thread {
     padding: 1.25rem 1.5rem;
     overflow-y: auto;
-    flex: 1;
-    min-height: 320px;
-    max-height: calc(100vh - 18rem);
+    flex: 1 1 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 1rem;
@@ -420,6 +473,115 @@ button.primary:hover:not(:disabled),
     background: rgba(148, 163, 184, 0.08);
     border-left: 3px solid #94a3b8;
     border-radius: 6px;
+}
+
+.chat-thinking-toggle {
+    margin-bottom: 0.5rem;
+}
+
+.chat-thinking-toggle > summary {
+    list-style: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #64748b;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    user-select: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chat-thinking-toggle > summary:hover {
+    background: rgba(148, 163, 184, 0.2);
+    color: #334155;
+}
+
+.chat-thinking-toggle > summary::-webkit-details-marker {
+    display: none;
+}
+
+.chat-thinking-toggle__chevron {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 5px solid currentColor;
+    transition: transform 0.18s ease;
+    transform-origin: 30% 50%;
+    margin-right: 0.1rem;
+}
+
+.chat-thinking-toggle[open] > summary .chat-thinking-toggle__chevron {
+    transform: rotate(90deg);
+}
+
+.chat-thinking-toggle[open] > summary {
+    background: rgba(99, 102, 241, 0.12);
+    color: #4338ca;
+    border-color: rgba(99, 102, 241, 0.25);
+}
+
+.chat-thinking-toggle .chat-thinking {
+    margin-top: 0.4rem;
+    margin-bottom: 0;
+}
+
+/* Tool stream collapsible — reuses chat-thinking-toggle chevron styles */
+.chat-tool-toggle {
+    margin-top: 0.5rem;
+}
+
+.chat-tool-toggle > summary {
+    list-style: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #475569;
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    user-select: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chat-tool-toggle > summary:hover {
+    background: rgba(99, 102, 241, 0.16);
+    color: #4338ca;
+}
+
+.chat-tool-toggle > summary::-webkit-details-marker {
+    display: none;
+}
+
+.chat-tool-toggle[open] > summary {
+    background: rgba(99, 102, 241, 0.16);
+    color: #4338ca;
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
+.chat-tool-toggle[open] > summary .chat-thinking-toggle__chevron {
+    transform: rotate(90deg);
+}
+
+.chat-tool-toggle__list {
+    margin-top: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.chat-tool-toggle__list .chat-tool-card {
+    margin-top: 0;
 }
 
 .chat-text pre,
@@ -886,12 +1048,22 @@ button.primary:hover:not(:disabled),
 @media (max-width: 1100px) {
     .chat-grid {
         grid-template-columns: 1fr;
+        grid-auto-rows: auto;
+        height: auto;
+        min-height: calc(100vh - 2.5rem);
         gap: 1rem;
     }
 
+    .chat-grid > .panel {
+        height: auto;
+    }
+
     .config-panel {
-        position: static;
         max-height: none;
+    }
+
+    .conversation-panel {
+        min-height: 70vh;
     }
 
     .chat-thread {

@@ -66,7 +66,14 @@ public partial class Index : ComponentBase, IDisposable
     private bool _showThinking = true;
     private bool _showToolStream = true;
     private bool _useStreaming = true;
+    private bool _showToken;
+    private bool _showPassword;
     private readonly bool _useGatewayEventStreaming = false;
+
+    private void OnDisplayToggleChanged()
+    {
+        StateHasChanged();
+    }
 
     private bool _chatManualRefreshInFlight;
     private bool _chatHasAutoScrolled;
