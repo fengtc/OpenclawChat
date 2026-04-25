@@ -2,7 +2,10 @@
     display: grid;
     gap: 1rem;
     grid-template-columns: 320px minmax(0, 1fr);
-    padding: 1rem 0;
+    width: 100%;
+    max-width: 1440px;
+    min-height: calc(100vh - 2rem);
+    margin: 0 auto;
 }
 
 .panel {
@@ -117,7 +120,7 @@ button.ghost:hover:not(:disabled),
 .conversation-panel {
     display: flex;
     flex-direction: column;
-    min-height: 78vh;
+    min-height: calc(100vh - 2rem);
 }
 
 .error-box {

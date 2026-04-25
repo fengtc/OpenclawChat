@@ -509,6 +509,8 @@ public partial class Index : ComponentBase, IDisposable
             ["content"] = contentBlocks,
             ["timestamp"] = now,
         });
+        ResetChatScroll();
+        ScheduleAutoScroll(force: true);
 
         _chatSending = true;
         _error = null;
