@@ -1,0 +1,35 @@
+@page "/"
+@using Microsoft.AspNetCore.Components.Web
+@namespace OpenclawWebChat.Pages
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="~/" />
+    <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
+    <link href="css/site.css" rel="stylesheet" />
+    <link href="OpenclawWebChat.styles.css" rel="stylesheet" />
+    <link rel="icon" type="image/png" href="favicon.png"/>
+    <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
+</head>
+<body>
+    <component type="typeof(App)" render-mode="ServerPrerendered" />
+
+    <div id="blazor-error-ui">
+        <environment include="Staging,Production">
+            发生错误。应用可能在刷新前无法继续响应。
+        </environment>
+        <environment include="Development">
+            发生未处理异常。请在浏览器开发者工具中查看详情。
+        </environment>
+        <a href="" class="reload">重新加载</a>
+        <a class="dismiss">🗙</a>
+    </div>
+
+    <script src="js/chatInterop.js"></script>
+    <script src="_framework/blazor.server.js"></script>
+</body>
+</html>

@@ -1,0 +1,301 @@
+@page "/"
+@implements IDisposable
+
+<PageTitle>OpenClaw 网页聊天</PageTitle>
+
+<div class="chat-grid">
+    <section class="panel config-panel">
+        <h1>OpenClaw 网页聊天</h1>
+        <p class="hint">完全复刻 OpenClaw 网页界面的网关 `req/res/event` 聊天交互。</p>
+
+        <div class="form-grid">
+            <label>网关地址（WS）</label>
+            <input @bind="_connection.Endpoint" placeholder="ws://localhost:3000/ws" />
+
+            <label>会话标识</label>
+            <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync">
+                @foreach (var sessionKey in _sessionKeys)
+                {
+                    <option value="@sessionKey">@sessionKey</option>
+                }
+            </select>
+
+            <label>令牌 (可选)</label>
+            <input type="password" @bind="_connection.Token" placeholder="网关令牌" />
+
+            <label>密码 (可选)</label>
+            <input type="password" @bind="_connection.Password" placeholder="网关密码" />
+
+            <label>来源域 (可选)</label>
+            <input @bind="_connection.Origin" placeholder="留空自动按网关地址推导" />
+
+            <label class="check-row">
+                <input type="checkbox" @bind="_useStreaming" />
+                <span>启用前端流式动画（基于历史轮询）</span>
+            </label>
+
+            <label class="check-row">
+                <input type="checkbox" @bind="_showThinking" />
+                <span>显示思考与工具流</span>
+            </label>
+        </div>
+
+        <div class="config-actions">
+            <button @onclick="ConnectAsync" disabled="@(_connecting || _connected)">@(_connected ? "已连接" : (_connecting ? "连接中..." : "连接"))</button>
+            <button class="ghost" @onclick="DisconnectAsync" disabled="@(!_connected)">断开</button>
+            <button class="ghost" @onclick="RefreshSessionsAsync" disabled="@(!_connected || _loadingSessions)">@(_loadingSessions ? "会话加载中..." : "刷新会话")</button>
+            <button class="ghost" @onclick="ManualRefreshAsync" disabled="@(!_connected || _chatLoading)">@(_chatLoading ? "加载中..." : "刷新")</button>
+        </div>
+
+        <div class="status-box">
+            <div><strong>状态</strong> @_status</div>
+            <div><strong>会话</strong> @_connection.SessionKey</div>
+            @if (_waitingForAssistantReply)
+            {
+                <div><strong>等待</strong> @WaitingRoundLabel</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(_chatThinkingLevel))
+            {
+                <div><strong>思维等级</strong> @_chatThinkingLevel</div>
+            }
+        </div>
+    </section>
+
+    <section class="panel conversation-panel">
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <div class="error-box">@_error</div>
+        }
+
+        <div class="chat-split-container @( _sidebarOpen ? "chat-split-container--open" : string.Empty)">
+            <div class="chat-main">
+                <div class="chat-thread" role="log" aria-live="polite" @ref="_chatThreadRef" @onscroll="OnChatScroll">
+                    @if (_chatLoading)
+                    {
+                        <div class="muted">正在加载聊天记录...</div>
+                    }
+
+                    @foreach (var item in BuildChatItems())
+                    {
+                        @if (item is ChatDividerItem divider)
+                        {
+                            <div class="chat-divider" role="separator" data-ts="@divider.Timestamp">
+                                <span class="chat-divider__line"></span>
+                                <span class="chat-divider__label">@divider.Label</span>
+                                <span class="chat-divider__line"></span>
+                            </div>
+                        }
+                        else if (item is ChatReadingIndicatorItem)
+                        {
+                            <div class="chat-group assistant">
+                                <div class="chat-avatar assistant">AI</div>
+                                <div class="chat-group-messages">
+                                    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+                                        <span class="chat-reading-indicator__dots">
+                                            <span></span><span></span><span></span>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else if (item is ChatStreamItem stream)
+                        {
+                            <div class="chat-group assistant">
+                                <div class="chat-avatar assistant">AI</div>
+                                <div class="chat-group-messages">
+                                    <div class="chat-bubble streaming">
+                                        <div class="chat-text"><pre>@stream.Text</pre></div>
+                                    </div>
+                                    <div class="chat-group-footer">
+                                        <span class="chat-sender-name">助手</span>
+                                        <span class="chat-group-timestamp">@FormatTimestamp(stream.StartedAt)</span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else if (item is ChatGroupItem group)
+                        {
+                            <div class="chat-group @GetRoleClass(group.Role)">
+                                <div class="chat-avatar @GetRoleClass(group.Role)">@GetAvatar(group.Role)</div>
+                                <div class="chat-group-messages">
+                                    @foreach (var message in group.Messages)
+                                    {
+                                        var text = ExtractText(message);
+                                        var thinking = _showThinking && IsAssistantRole(message) ? ExtractThinking(message) : null;
+                                        var images = ExtractImages(message);
+                                        var toolCards = ExtractToolCards(message);
+                                        var canCopyMarkdown = IsAssistantRole(message) && !string.IsNullOrWhiteSpace(text);
+                                        if (text is null && thinking is null && images.Count == 0 && toolCards.Count == 0)
+                                        {
+                                            continue;
+                                        }
+
+                                        <div class="chat-bubble @(group.IsStreaming ? "streaming" : string.Empty)">
+                                            @if (canCopyMarkdown)
+                                            {
+                                                <button class="copy-btn" @onclick="() => CopyToDraft(text!)">复制</button>
+                                            }
+
+                                            @if (images.Count > 0)
+                                            {
+                                                <div class="chat-message-images">
+                                                    @foreach (var image in images)
+                                                    {
+                                                        <img src="@image" alt="附加图片" class="chat-message-image" />
+                                                    }
+                                                </div>
+                                            }
+
+                                            @if (!string.IsNullOrWhiteSpace(thinking))
+                                            {
+                                                <div class="chat-thinking"><pre>@thinking</pre></div>
+                                            }
+
+                                            @if (!string.IsNullOrWhiteSpace(text))
+                                            {
+                                                <div class="chat-text"><pre>@text</pre></div>
+                                            }
+
+                                            @foreach (var card in toolCards)
+                                            {
+                                                var detail = FormatToolCardDetail(card);
+                                                var shortOutput = IsShortToolOutput(card);
+                                                <div
+                                                    class="chat-tool-card @(CanOpenToolSidebar(card) ? "chat-tool-card--clickable" : string.Empty)"
+                                                    @onclick="() => OpenToolSidebar(card)">
+                                                    <div class="chat-tool-card__header">
+                                                        <div class="chat-tool-card__title">
+                                                            <span>@(card.Kind == ToolCardKind.Call ? "工具" : "结果")</span>
+                                                            <span>@card.Name</span>
+                                                        </div>
+                                                        @if (CanOpenToolSidebar(card))
+                                                        {
+                                                            <span class="chat-tool-card__action">查看</span>
+                                                        }
+                                                    </div>
+
+                                                    @if (!string.IsNullOrWhiteSpace(detail))
+                                                    {
+                                                        <div class="chat-tool-card__detail">@detail</div>
+                                                    }
+
+                                                    @if (string.IsNullOrWhiteSpace(card.Text))
+                                                    {
+                                                        <div class="chat-tool-card__status-text muted">已完成</div>
+                                                    }
+                                                    else if (shortOutput)
+                                                    {
+                                                        <div class="chat-tool-card__inline mono">@card.Text</div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <div class="chat-tool-card__preview mono">@GetTruncatedPreview(card.Text!)</div>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                    <div class="chat-group-footer">
+                                        <span class="chat-sender-name">@GetSenderName(group.Role)</span>
+                                        <span class="chat-group-timestamp">@FormatTimestamp(group.Timestamp)</span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+
+                @if (_chatQueue.Count > 0)
+                {
+                    <div class="chat-queue" role="status" aria-live="polite">
+                        <div class="chat-queue__title">排队中 (@_chatQueue.Count)</div>
+                        <div class="chat-queue__list">
+                            @foreach (var queued in _chatQueue)
+                            {
+                                <div class="chat-queue__item">
+                                    <div class="chat-queue__text">@GetQueuedSummary(queued)</div>
+                                    <button class="btn chat-queue__remove" type="button" @onclick="() => RemoveQueuedMessage(queued.Id)">X</button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (ShowCompactionIndicator())
+                {
+                    <div class="compaction-indicator @(IsCompactionActive() ? "compaction-indicator--active" : "compaction-indicator--complete")" role="status" aria-live="polite">
+                        @(IsCompactionActive() ? "正在压缩上下文..." : "上下文已压缩")
+                    </div>
+                }
+
+                @if (ShowFallbackIndicator())
+                {
+                    <div class="compaction-indicator @(IsFallbackCleared() ? "compaction-indicator--fallback-cleared" : "compaction-indicator--fallback")" role="status" aria-live="polite" title="@BuildFallbackDetails()">
+                        @(IsFallbackCleared() ? $"回退已清除：{_fallbackStatus!.Selected}" : $"回退生效中：{_fallbackStatus!.Active}")
+                    </div>
+                }
+
+                @if (_chatNewMessagesBelow && !_chatManualRefreshInFlight)
+                {
+                    <button class="btn chat-new-messages" type="button" @onclick="ScrollToBottomAsync">有新消息</button>
+                }
+
+                <div class="chat-compose">
+                    @if (_attachments.Count > 0)
+                    {
+                        <div class="chat-attachments">
+                            @foreach (var attachment in _attachments)
+                            {
+                                <div class="chat-attachment">
+                                    <img src="@attachment.DataUrl" alt="附件预览" class="chat-attachment__img" />
+                                    <button class="chat-attachment__remove" type="button" @onclick="() => RemoveAttachment(attachment.Id)">X</button>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <div class="chat-compose__row">
+                        <label class="field chat-compose__field">
+                            <span>消息</span>
+                            <textarea
+                                @bind="_chatMessage"
+                                rows="4"
+                                disabled="@(!_connected)"
+                                @onkeydown="OnComposerKeyDown"
+                                placeholder="@GetComposerPlaceholder()"></textarea>
+                        </label>
+                        <div class="chat-compose__actions">
+                            <label class="btn ghost file-btn">
+                                图片
+                                <InputFile OnChange="OnAttachmentsSelectedAsync" accept="image/*" multiple />
+                            </label>
+                            <button
+                                class="btn"
+                                disabled="@(!_connected || (!CanAbort && _chatSending))"
+                                @onclick="@(CanAbort ? AbortAsync : NewSessionAsync)">
+                                @(CanAbort ? "停止" : "新会话")
+                            </button>
+                            <button class="btn primary" disabled="@(!_connected)" @onclick="SendAsync">
+                                @(IsBusy ? "排队" : "发送")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            @if (_sidebarOpen)
+            {
+                <aside class="chat-sidebar">
+                    <div class="chat-sidebar__header">
+                        <strong>工具输出</strong>
+                        <button class="btn ghost" @onclick="CloseSidebar">关闭</button>
+                    </div>
+                    <div class="chat-sidebar__content">
+                        <pre>@_sidebarContent</pre>
+                    </div>
+                </aside>
+            }
+        </div>
+    </section>
+</div>
+

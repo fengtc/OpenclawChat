@@ -1,0 +1,41 @@
+﻿@page
+@model OpenclawWebChat.Pages.ErrorModel
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>错误</title>
+    <link href="~/css/bootstrap/bootstrap.min.css" rel="stylesheet" />
+    <link href="~/css/site.css" rel="stylesheet" asp-append-version="true" />
+</head>
+
+<body>
+    <div class="main">
+        <div class="content px-4">
+            <h1 class="text-danger">错误。</h1>
+            <h2 class="text-danger">处理请求时发生错误。</h2>
+
+            @if (Model.ShowRequestId)
+            {
+                <p>
+                    <strong>请求 ID：</strong> <code>@Model.RequestId</code>
+                </p>
+            }
+
+            <h3>开发模式</h3>
+            <p>
+                切换到 <strong>Development</strong> 环境后，将显示更详细的错误信息。
+            </p>
+            <p>
+                <strong>已部署应用不应启用 Development 环境。</strong>
+                否则可能向终端用户暴露异常中的敏感信息。
+                若仅用于本地调试，请将环境变量 <strong>ASPNETCORE_ENVIRONMENT</strong> 设置为 <strong>Development</strong> 后重启应用。
+            </p>
+        </div>
+    </div>
+</body>
+
+</html>
