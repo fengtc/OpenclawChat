@@ -3,8 +3,18 @@
 
 <PageTitle>OpenClaw Chat</PageTitle>
 
-<div class="chat-grid">
+<div class="chat-grid @(_configCollapsed ? "chat-grid--config-collapsed" : "chat-grid--config-open")">
+    <div class="config-backdrop" @onclick="ToggleConfigPanel" aria-hidden="true"></div>
     <section class="panel config-panel">
+        <button type="button"
+                class="config-panel__toggle"
+                @onclick="ToggleConfigPanel"
+                aria-label="隐藏配置面板"
+                title="隐藏配置面板">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="15 18 9 12 15 6" />
+            </svg>
+        </button>
         <h1>OpenClaw Chat</h1>
         <p class="hint"></p>
 
@@ -109,6 +119,20 @@
     </section>
 
     <section class="panel conversation-panel">
+        @if (_configCollapsed)
+        {
+            <button type="button"
+                    class="config-panel__expand"
+                    @onclick="ToggleConfigPanel"
+                    aria-label="显示配置面板"
+                    title="显示配置面板">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="3" y1="6" x2="21" y2="6" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
+            </button>
+        }
         @if (!string.IsNullOrWhiteSpace(_error))
         {
             <div class="error-box">@_error</div>

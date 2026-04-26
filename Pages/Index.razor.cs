@@ -90,6 +90,8 @@ public partial class Index : ComponentBase, IDisposable
     private bool _sidebarOpen;
     private string? _sidebarContent;
 
+    private bool _configCollapsed;
+
     private CompactionIndicatorStatus? _compactionStatus;
     private FallbackIndicatorStatus? _fallbackStatus;
     private CancellationTokenSource? _compactionToastCts;
@@ -139,6 +141,19 @@ public partial class Index : ComponentBase, IDisposable
             {
                 // The browser may still have an older chatInterop.js cached.
             }
+
+            try
+            {
+                var width = await JS.InvokeAsync<double>("openclawChat.getWindowWidth");
+                if (width > 0 && width <= 1100 && !_configCollapsed)
+                {
+                    _configCollapsed = true;
+                    StateHasChanged();
+                }
+            }
+            catch (JSException)
+            {
+            }
         }
 
         if (_pendingScroll)
@@ -158,6 +173,11 @@ public partial class Index : ComponentBase, IDisposable
         }
 
         await base.OnAfterRenderAsync(firstRender);
+    }
+
+    private void ToggleConfigPanel()
+    {
+        _configCollapsed = !_configCollapsed;
     }
 
     private async Task ConnectAsync()

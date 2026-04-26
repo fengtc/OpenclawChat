@@ -26,6 +26,10 @@ window.openclawChat = window.openclawChat || {
     return element ? element.value : "";
   },
 
+  getWindowWidth: function () {
+    return window.innerWidth || document.documentElement.clientWidth || 0;
+  },
+
   bindComposerSubmit: function (element, submitButton) {
     if (!element) {
       return;
