@@ -1,0 +1,106 @@
+@page "/activate"
+@inject UserStore Users
+@inject AuthState Auth
+@inject NavigationManager Nav
+
+<PageTitle>激活账号 - OpenClaw Chat</PageTitle>
+
+<div class="auth-shell">
+    <form class="auth-card" @onsubmit="HandleAsync" @onsubmit:preventDefault>
+        <h1>激活账号</h1>
+
+        @if (string.IsNullOrWhiteSpace(_token))
+        {
+            <p class="auth-message auth-message--error">链接缺少激活 token。</p>
+        }
+        else if (_user is null)
+        {
+            <p class="auth-message auth-message--error">激活链接无效或已被使用。</p>
+        }
+        else if (_user.IsActivated)
+        {
+            <p class="auth-message">该账号已激活，请直接 <a href="/login">登录</a>。</p>
+        }
+        else
+        {
+            <p class="auth-hint">
+                你正在为账号 <strong>@_user.Username</strong>
+                （邮箱：<code>@_user.Email</code> · agent：<code>@_user.AgentName</code>）设置密码。
+            </p>
+
+            <label class="auth-field">
+                <span>密码（≥ 6 位）</span>
+                <input type="password" @bind="_password" autocomplete="new-password" />
+            </label>
+
+            <label class="auth-field">
+                <span>确认密码</span>
+                <input type="password" @bind="_passwordConfirm" autocomplete="new-password" />
+            </label>
+
+            @if (!string.IsNullOrWhiteSpace(_message))
+            {
+                <div class="auth-message @(_isError ? "auth-message--error" : "auth-message--ok")">@_message</div>
+            }
+
+            <button type="submit" disabled="@_busy">@(_busy ? "处理中..." : "激活并登录")</button>
+        }
+    </form>
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public string? Token { get; set; }
+
+    private string? _token;
+    private Models.UserAccount? _user;
+    private string _password = string.Empty;
+    private string _passwordConfirm = string.Empty;
+    private string? _message;
+    private bool _isError;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _token = Token;
+        if (!string.IsNullOrWhiteSpace(_token))
+        {
+            _user = Users.FindByActivationToken(_token);
+        }
+    }
+
+    private void HandleAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_token) || _user is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _message = null;
+        _isError = false;
+        try
+        {
+            if (!string.Equals(_password, _passwordConfirm, StringComparison.Ordinal))
+            {
+                _isError = true;
+                _message = "两次输入的密码不一致。";
+                return;
+            }
+
+            var result = Users.Activate(_token, _password);
+            if (!result.Success || result.User is null)
+            {
+                _isError = true;
+                _message = result.Message;
+                return;
+            }
+
+            Auth.SignIn(result.User);
+            Nav.NavigateTo("/chat", replace: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

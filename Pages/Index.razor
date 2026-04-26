@@ -1,4 +1,4 @@
-@page "/"
+@page "/chat"
 @implements IDisposable
 
 <PageTitle>OpenClaw Chat</PageTitle>
@@ -16,70 +16,45 @@
             </svg>
         </button>
         <h1>OpenClaw Chat</h1>
-        <p class="hint"></p>
+        <p class="hint">
+            @if (Auth.CurrentUser is not null)
+            {
+                <span>已登录：<strong>@Auth.CurrentUser.Username</strong></span>
+                <span> · </span>
+                <span>Agent: <code>@Auth.CurrentUser.AgentName</code></span>
+            }
+        </p>
 
         <div class="form-grid">
-            <label>网关地址（WS）</label>
-            <input @bind="_connection.Endpoint" placeholder="ws://localhost:3000/ws" disabled="@_connected" />
+            <label>网关地址</label>
+            <input @bind="_connection.Endpoint" placeholder="ws://localhost:3000/ws" disabled="@(_connected || !Auth.IsAdmin)" />
 
-            <label>会话标识</label>
-            <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync">
-                @foreach (var sessionKey in _sessionKeys)
-                {
-                    <option value="@sessionKey">@sessionKey</option>
-                }
-            </select>
+            <label>会话标识 (Agent)</label>
+            @if (Auth.IsAdmin)
+            {
+                <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync">
+                    @foreach (var sessionKey in _sessionKeys)
+                    {
+                        <option value="@sessionKey">@sessionKey</option>
+                    }
+                </select>
+            }
+            else
+            {
+                <input value="@_connection.SessionKey" readonly disabled />
+            }
 
-            <label>令牌 (可选)</label>
-            <div class="input-reveal">
-                <input type="@(_showToken ? "text" : "password")" @bind="_connection.Token" placeholder="网关令牌" disabled="@_connected" />
-                <button type="button" class="input-reveal__toggle" @onclick="() => _showToken = !_showToken"
-                        aria-label="@(_showToken ? "隐藏令牌" : "显示令牌")"
-                        title="@(_showToken ? "隐藏" : "显示")">
-                    @if (_showToken)
-                    {
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.77 21.77 0 0 1 5.06-5.94" />
-                            <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a21.86 21.86 0 0 1-3.17 4.19" />
-                            <line x1="1" y1="1" x2="23" y2="23" />
-                        </svg>
-                    }
-                    else
-                    {
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" />
-                            <circle cx="12" cy="12" r="3" />
-                        </svg>
-                    }
-                </button>
-            </div>
+            @if (Auth.IsAdmin)
+            {
+                <label>令牌 (Token)</label>
+                <input type="password" @bind="_connection.Token" placeholder="网关 Token" disabled="@_connected" />
 
-            <label>密码 (可选)</label>
-            <div class="input-reveal">
-                <input type="@(_showPassword ? "text" : "password")" @bind="_connection.Password" placeholder="网关密码" disabled="@_connected" />
-                <button type="button" class="input-reveal__toggle" @onclick="() => _showPassword = !_showPassword"
-                        aria-label="@(_showPassword ? "隐藏密码" : "显示密码")"
-                        title="@(_showPassword ? "隐藏" : "显示")">
-                    @if (_showPassword)
-                    {
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.77 21.77 0 0 1 5.06-5.94" />
-                            <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a21.86 21.86 0 0 1-3.17 4.19" />
-                            <line x1="1" y1="1" x2="23" y2="23" />
-                        </svg>
-                    }
-                    else
-                    {
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" />
-                            <circle cx="12" cy="12" r="3" />
-                        </svg>
-                    }
-                </button>
-            </div>
+                <label>密码 (可选)</label>
+                <input type="password" @bind="_connection.Password" placeholder="网关密码" disabled="@_connected" />
 
-            <label>来源域 (可选)</label>
-            <input @bind="_connection.Origin" placeholder="留空自动按网关地址推导" disabled="@_connected" />
+                <label>来源域 (可选)</label>
+                <input @bind="_connection.Origin" placeholder="留空自动按网关地址推导" disabled="@_connected" />
+            }
 
             <label class="check-row">
                 <input type="checkbox" @bind="_useStreaming" />
@@ -101,7 +76,11 @@
             <button @onclick="ConnectAsync" disabled="@(_connecting || _connected)">@(_connected ? "已连接" : (_connecting ? "连接中..." : "连接"))</button>
             <button class="ghost" @onclick="DisconnectAsync" disabled="@(!_connected)">断开</button>
             <button class="ghost" @onclick="NewSessionAsync" disabled="@(!_connected || IsBusy)">新会话</button>
-            <button class="ghost" @onclick="ManualRefreshAsync" disabled="@(!_connected || _chatLoading)">@(_chatLoading ? "加载中..." : "刷新")</button>
+            @if (Auth.IsAdmin)
+            {
+                <button class="ghost" @onclick="OpenUserMgmt">用户管理</button>
+            }
+            <button class="ghost" @onclick="SignOut">注销</button>
         </div>
 
         <div class="status-box">
@@ -467,5 +446,81 @@
             }
         </div>
     </section>
+
+    @if (_userMgmtOpen && Auth.IsAdmin && _tenant is not null)
+    {
+        <div class="user-mgmt-overlay" @onclick="CloseUserMgmt"></div>
+        <div class="user-mgmt-modal" @onclick:stopPropagation="true">
+            <div class="user-mgmt-modal__header">
+                <h2>用户管理 · @_tenant.Name</h2>
+                <button type="button" class="ghost" @onclick="CloseUserMgmt">关闭</button>
+            </div>
+
+            <section class="admin-section">
+                <h2>邀请新用户</h2>
+                <p class="auth-hint">
+                    输入用户名（同时作为 OpenClaw agent 名）与邮箱（全局唯一），系统会生成一次性激活链接。
+                    请将链接复制后通过邮件等方式发给该用户。<br />
+                    邀请前请先在后端执行 agent 创建命令。
+                </p>
+
+                <div class="invite-form">
+                    <input @bind="_inviteUsername" placeholder="用户名 (例如：work)" />
+                    <input @bind="_inviteEmail" placeholder="邮箱（全局唯一）" type="email" />
+                    <button type="button" @onclick="InviteAsync">生成邀请链接</button>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_inviteMessage))
+                {
+                    <div class="auth-message @(_inviteError ? "auth-message--error" : "auth-message--ok")">@_inviteMessage</div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_lastInviteUrl))
+                {
+                    <div class="auth-message">
+                        <div>激活链接（复制发给用户）：</div>
+                        <pre class="auth-cmd">@_lastInviteUrl</pre>
+                        <div>请同时在后端执行 agent 创建命令：</div>
+                        <pre class="auth-cmd">@_lastInviteAgentCmd</pre>
+                    </div>
+                }
+            </section>
+
+            <section class="admin-section">
+                <h2>所有用户 (@_allUsers.Count)</h2>
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>用户名</th><th>邮箱</th><th>Agent</th><th>角色</th><th>状态</th>
+                            <th>注册时间</th><th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var u in _allUsers)
+                        {
+                            <tr>
+                                <td>@u.Username</td>
+                                <td>@(u.Email ?? "-")</td>
+                                <td><code>@u.AgentName</code></td>
+                                <td>@(u.IsAdmin ? "管理员" : "普通用户")</td>
+                                <td>@(u.IsActivated ? "已激活" : "待激活")</td>
+                                <td>@u.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                                <td>
+                                    @if (!u.IsAdmin && !u.IsActivated && !string.IsNullOrEmpty(u.ActivationToken))
+                                    {
+                                        <button class="ghost" @onclick="() => ShowInviteLink(u.Username, u.ActivationToken!)">显示链接</button>
+                                    }
+                                    @if (!u.IsAdmin)
+                                    {
+                                        <button class="ghost" @onclick="() => DeleteUser(u.Username)">删除</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        </div>
+    }
 </div>
 

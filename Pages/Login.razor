@@ -1,0 +1,74 @@
+@page "/login"
+@inject UserStore Users
+@inject AuthState Auth
+@inject NavigationManager Nav
+
+<PageTitle>登录 - OpenClaw Chat</PageTitle>
+
+<div class="auth-shell">
+    <form class="auth-card" @onsubmit="HandleLogin" @onsubmit:preventDefault>
+        <h1>登录</h1>
+        <p class="auth-hint">使用账号邮箱登录。系统会根据邮箱自动定位你所属的租户。</p>
+
+        <label class="auth-field">
+            <span>邮箱</span>
+            <input type="email" @bind="_email" autocomplete="username" />
+        </label>
+
+        <label class="auth-field">
+            <span>密码</span>
+            <input type="password" @bind="_password" autocomplete="current-password" />
+        </label>
+
+        @if (!string.IsNullOrWhiteSpace(_message))
+        {
+            <div class="auth-message @(_isError ? "auth-message--error" : string.Empty)">@_message</div>
+        }
+
+        <button type="submit" disabled="@_busy">@(_busy ? "登录中..." : "登录")</button>
+
+        <div class="auth-foot">
+            <span>没有账号？请联系所在租户的管理员邀请你，或 <a href="/setup">注册新租户</a>。</span>
+        </div>
+    </form>
+</div>
+
+@code {
+    private string _email = string.Empty;
+    private string _password = string.Empty;
+    private string? _message;
+    private bool _isError;
+    private bool _busy;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender && Auth.IsAuthenticated)
+        {
+            Nav.NavigateTo("/chat", replace: true);
+        }
+    }
+
+    private void HandleLogin()
+    {
+        _busy = true;
+        _message = null;
+        _isError = false;
+        try
+        {
+            var result = Users.Authenticate(_email.Trim(), _password);
+            if (!result.Success || result.User is null)
+            {
+                _isError = true;
+                _message = result.Message;
+                return;
+            }
+
+            Auth.SignIn(result.User);
+            Nav.NavigateTo("/chat", replace: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

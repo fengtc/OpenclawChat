@@ -1,4 +1,41 @@
 /* ===== Layout ===== */
+.user-mgmt-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 1000;
+}
+
+.user-mgmt-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(960px, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    background: #ffffff;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 24px 60px -12px rgba(15, 23, 42, 0.35);
+    padding: 1.25rem 1.5rem 1.5rem;
+    z-index: 1001;
+}
+
+.user-mgmt-modal__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.user-mgmt-modal__header h2 {
+    font-size: 1.05rem;
+    margin: 0;
+    color: #1f2937;
+}
+
 .chat-grid {
     display: grid;
     gap: 1.25rem;

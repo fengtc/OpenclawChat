@@ -22,7 +22,7 @@ public partial class Index : ComponentBase, IDisposable
     private const int ToolOutputCharLimit = 120_000;
     private const int CompactionToastDurationMs = 5_000;
     private const int FallbackToastDurationMs = 8_000;
-    private static readonly TimeSpan NonStreamingHistoryTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan NonStreamingHistoryTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan NonStreamingHistoryPollInterval = TimeSpan.FromMilliseconds(800);
 
     private static readonly Regex SilentReplyRegex = new("^\\s*NO_REPLY\\s*$", RegexOptions.Compiled);
@@ -35,6 +35,14 @@ public partial class Index : ComponentBase, IDisposable
     [Inject] private IOptionsSnapshot<OpenclawConnectionOptions> ConnectionOptions { get; set; } = default!;
 
     [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    [Inject] private AuthState Auth { get; set; } = default!;
+
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
+    [Inject] private UserStore Users { get; set; } = default!;
+
+    private Models.Tenant? _tenant;
 
     private OpenclawConnectionOptions _connection = new();
     private readonly List<JsonObject> _chatMessages = [];
@@ -92,6 +100,22 @@ public partial class Index : ComponentBase, IDisposable
 
     private bool _configCollapsed;
 
+    // 用户管理弹窗（管理员）
+    private bool _userMgmtOpen;
+    private IReadOnlyList<UserAccount> _allUsers = [];
+    private string _inviteUsername = string.Empty;
+    private string _inviteEmail = string.Empty;
+    private string? _inviteMessage;
+    private bool _inviteError;
+    private string? _lastInviteUrl;
+    private string? _lastInviteAgentCmd;
+
+    /// <summary>
+    /// 已经看到/处理过的最大助手消息时间戳（毫秒，规范化后）。
+    /// 用于在后续等待新一轮回复时严格过滤，避免把上一轮迟到的助手消息误当成新回复。
+    /// </summary>
+    private long _lastSeenAssistantTs;
+
     private CompactionIndicatorStatus? _compactionStatus;
     private FallbackIndicatorStatus? _fallbackStatus;
     private CancellationTokenSource? _compactionToastCts;
@@ -107,15 +131,27 @@ public partial class Index : ComponentBase, IDisposable
 
     protected override void OnInitialized()
     {
+        if (!Auth.IsAuthenticated || Auth.CurrentUser is null)
+        {
+            // 未登录：跳转推到 OnAfterRender
+            return;
+        }
+
+        _tenant = Users.GetTenant(Auth.CurrentUser.TenantId);
+        if (_tenant is null)
+        {
+            return;
+        }
+
+        var sessionKey = Auth.CurrentUser!.AgentName;
+
         _connection = new OpenclawConnectionOptions
         {
-            Endpoint = ConnectionOptions.Value.Endpoint,
-            Token = ConnectionOptions.Value.Token,
-            Password = ConnectionOptions.Value.Password,
-            Origin = ConnectionOptions.Value.Origin,
-            SessionKey = string.IsNullOrWhiteSpace(ConnectionOptions.Value.SessionKey)
-                ? "main"
-                : ConnectionOptions.Value.SessionKey,
+            Endpoint = _tenant.GatewayEndpoint,
+            Token = _tenant.GatewayToken,
+            Password = null,
+            Origin = _tenant.GatewayOrigin ?? ConnectionOptions.Value.Origin,
+            SessionKey = sessionKey,
         };
 
         EnsureSessionKeyOption(_connection.SessionKey);
@@ -131,6 +167,12 @@ public partial class Index : ComponentBase, IDisposable
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender && (!Auth.IsAuthenticated || _tenant is null))
+        {
+            Nav.NavigateTo("/login", replace: true);
+            return;
+        }
+
         if (firstRender)
         {
             try
@@ -180,6 +222,85 @@ public partial class Index : ComponentBase, IDisposable
         _configCollapsed = !_configCollapsed;
     }
 
+    private async Task SignOut()
+    {
+        if (_connected)
+        {
+            try
+            {
+                await ChatClient.DisconnectAsync();
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+
+        Auth.SignOut();
+        Nav.NavigateTo("/login", replace: true);
+    }
+
+    private void OpenUserMgmt()
+    {
+        if (!Auth.IsAdmin || _tenant is null) return;
+        _allUsers = Users.GetAllUsers(_tenant.Id);
+        _inviteMessage = null;
+        _inviteError = false;
+        _lastInviteUrl = null;
+        _lastInviteAgentCmd = null;
+        _userMgmtOpen = true;
+    }
+
+    private void CloseUserMgmt()
+    {
+        _userMgmtOpen = false;
+    }
+
+    private void InviteAsync()
+    {
+        if (_tenant is null) return;
+
+        _inviteMessage = null;
+        _inviteError = false;
+        _lastInviteUrl = null;
+
+        var result = Users.Invite(_tenant.Id, _inviteUsername.Trim(), _inviteEmail.Trim());
+        if (!result.Success || string.IsNullOrEmpty(result.ActivationToken))
+        {
+            _inviteError = true;
+            _inviteMessage = result.Message;
+            return;
+        }
+
+        _inviteMessage = result.Message;
+        _lastInviteUrl = BuildActivationUrl(result.ActivationToken!);
+        _lastInviteAgentCmd = AgentCommandHelper.BuildAddCommand(result.Username!);
+        _inviteUsername = string.Empty;
+        _inviteEmail = string.Empty;
+        _allUsers = Users.GetAllUsers(_tenant.Id);
+    }
+
+    private void ShowInviteLink(string username, string token)
+    {
+        _lastInviteUrl = BuildActivationUrl(token);
+        _lastInviteAgentCmd = AgentCommandHelper.BuildAddCommand(username);
+        _inviteMessage = $"已显示 {username} 的激活链接。";
+        _inviteError = false;
+    }
+
+    private void DeleteUser(string username)
+    {
+        if (_tenant is null) return;
+        Users.DeleteUser(_tenant.Id, username);
+        _allUsers = Users.GetAllUsers(_tenant.Id);
+    }
+
+    private string BuildActivationUrl(string token)
+    {
+        var baseUri = Nav.BaseUri.TrimEnd('/');
+        return $"{baseUri}/activate?token={Uri.EscapeDataString(token)}";
+    }
+
     private async Task ConnectAsync()
     {
         _connecting = true;
@@ -189,6 +310,8 @@ public partial class Index : ComponentBase, IDisposable
         {
             _connection.SessionKey = "main";
         }
+
+        // 多租户模式下网关凭据来自 tenants 表，由初始化时录入；连接面板中管理员仍可临时修改本会话使用的值，但不再回写持久化。
 
         try
         {
@@ -224,6 +347,7 @@ public partial class Index : ComponentBase, IDisposable
             _chatStreamStartedAt = null;
             _waitingForAssistantReply = false;
             _activeWaitingRound = null;
+            _lastSeenAssistantTs = 0;
             ResetToolStream();
             _loadingSessions = false;
         }
@@ -350,6 +474,7 @@ public partial class Index : ComponentBase, IDisposable
             EnsureSessionKeyOption(response?.SessionKey);
             _chatMessages.Clear();
 
+            long latestAssistantTs = 0;
             var rawMessages = response?.Messages ?? [];
             foreach (var raw in rawMessages)
             {
@@ -365,7 +490,20 @@ public partial class Index : ComponentBase, IDisposable
                 }
 
                 _chatMessages.Add(message);
+
+                if (string.Equals(GetRole(message), "assistant", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ts = NormalizeTimestamp(GetLong(message, "timestamp"));
+                    if (ts > latestAssistantTs)
+                    {
+                        latestAssistantTs = ts;
+                    }
+                }
             }
+
+            // 历史已重新加载到本地：把基线对齐到历史中的最新助手消息时间戳，
+            // 后续轮询只接受严格更晚的回复。
+            _lastSeenAssistantTs = latestAssistantTs;
 
             _chatThinkingLevel = response?.ThinkingLevel;
         }
@@ -634,7 +772,10 @@ public partial class Index : ComponentBase, IDisposable
     private async Task<bool> WaitForAssistantReplyViaHistoryAsync(long requestStartedAt, bool animateText)
     {
         var deadline = DateTimeOffset.UtcNow + NonStreamingHistoryTimeout;
-        var requestLowerBound = requestStartedAt - 120_000;
+        var skewBound = requestStartedAt - 120_000;
+        // 必须严格晚于上一轮已经看到的助手消息时间戳，避免把上一轮迟到的回复误当成本轮回复。
+        var requestLowerBound = Math.Max(_lastSeenAssistantTs + 1, skewBound);
+        long maxSeenTs = _lastSeenAssistantTs;
 
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -668,6 +809,10 @@ public partial class Index : ComponentBase, IDisposable
                     }
 
                     var timestamp = NormalizeTimestamp(GetLong(message, "timestamp"));
+                    if (timestamp > maxSeenTs)
+                    {
+                        maxSeenTs = timestamp;
+                    }
                     if (timestamp < requestLowerBound)
                     {
                         continue;
@@ -709,6 +854,7 @@ public partial class Index : ComponentBase, IDisposable
                         _chatMessages.Add(candidate);
                     }
 
+                    _lastSeenAssistantTs = Math.Max(_lastSeenAssistantTs, candidateTs);
                     return true;
                 }
             }
@@ -716,6 +862,9 @@ public partial class Index : ComponentBase, IDisposable
             await Task.Delay(NonStreamingHistoryPollInterval);
         }
 
+        // 超时未拿到本轮新回复：把已经看到的最大助手时间戳当作"已处理"基线，
+        // 这样下一轮发问时，迟到的本轮回复不会被错误地当成新回复显示。
+        _lastSeenAssistantTs = Math.Max(_lastSeenAssistantTs, maxSeenTs);
         return false;
     }
 

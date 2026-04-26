@@ -1,0 +1,23 @@
+@page "/"
+@inject AuthState Auth
+@inject NavigationManager Nav
+
+<PageTitle>OpenClaw Chat</PageTitle>
+
+<div class="auth-shell">
+    <div class="auth-card">
+        <h1>OpenClaw Chat</h1>
+        <p class="auth-hint">请使用账号邮箱登录。</p>
+        <div class="auth-foot">
+            <a href="/login">前往登录</a>
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;
+        Nav.NavigateTo(Auth.IsAuthenticated ? "/chat" : "/login", replace: true);
+    }
+}

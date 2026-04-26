@@ -1,3 +1,8 @@
+@inject AuthState Auth
+@inject UserStore Users
+@inject NavigationManager Nav
+@implements IDisposable
+
 <div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
         <a class="navbar-brand" href="">OpenClaw 网页聊天</a>
@@ -6,10 +11,69 @@
 
 <div class="nav-scrollable">
     <nav class="flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="oi oi-chat" aria-hidden="true"></span> 聊天
-            </NavLink>
-        </div>
+        @if (Auth.IsAuthenticated && Auth.CurrentUser is { } user)
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="/chat" Match="NavLinkMatch.All">
+                    <span class="oi oi-chat" aria-hidden="true"></span> 聊天
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <span class="nav-user-info">
+                    @user.Username @(Auth.IsAdmin ? "(管理员)" : string.Empty)
+                </span>
+                @if (_tenantName is not null)
+                {
+                    <span class="nav-user-info muted">租户：@_tenantName</span>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="/login">
+                    <span class="oi oi-account-login" aria-hidden="true"></span> 登录
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="/setup">
+                    <span class="oi oi-plus" aria-hidden="true"></span> 注册新租户
+                </NavLink>
+            </div>
+        }
     </nav>
 </div>
+
+@code {
+    private string? _tenantName;
+
+    protected override void OnInitialized()
+    {
+        Auth.StateChanged += OnAuthChanged;
+        ResolveTenantName();
+    }
+
+    private void OnAuthChanged()
+    {
+        ResolveTenantName();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ResolveTenantName()
+    {
+        if (Auth.CurrentUser is { } u)
+        {
+            _tenantName = Users.GetTenant(u.TenantId)?.Name;
+        }
+        else
+        {
+            _tenantName = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        Auth.StateChanged -= OnAuthChanged;
+    }
+}

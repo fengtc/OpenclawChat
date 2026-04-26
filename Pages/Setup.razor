@@ -1,0 +1,160 @@
+@page "/setup"
+@using OpenclawChat.Models
+@inject UserStore Users
+@inject AuthState Auth
+@inject NavigationManager Nav
+
+<PageTitle>初始化租户 - OpenClaw Chat</PageTitle>
+
+<div class="auth-shell">
+    @if (_completed && _result?.Tenant is not null && _result.Admin is not null)
+    {
+        <div class="auth-card">
+            <h1>租户已创建</h1>
+            <p class="auth-message auth-message--ok">
+                <strong>@_result.Tenant.Name</strong> 已创建。管理员邮箱：<code>@_result.Admin.Email</code>
+            </p>
+            <p class="auth-hint">请使用上述邮箱在登录页登录，并在管理页邀请其他成员。</p>
+            <div class="auth-foot">
+                <a href="/login">前往登录</a>
+            </div>
+        </div>
+    }
+    else
+    {
+        <form class="auth-card" @onsubmit="HandleAsync" @onsubmit:preventDefault>
+            <h1>初始化租户</h1>
+            <p class="auth-hint">
+                创建一个新的租户：绑定一台 OpenClaw 网关 + 一个管理员账号。
+                同一系统可创建多个租户；用户登录时按邮箱自动定位到所属租户。
+            </p>
+
+            <label class="auth-field">
+                <span>租户名称</span>
+                <input @bind="_tenantName" placeholder="例如：Acme 实验室" />
+            </label>
+
+            <label class="auth-field">
+                <span>网关地址 (Endpoint)</span>
+                <input @bind="_endpoint" placeholder="ws://36.103.234.13:19091/ws" />
+            </label>
+
+            <label class="auth-field">
+                <span>令牌 (Token)</span>
+                <input type="password" @bind="_token" placeholder="网关 Token" />
+            </label>
+
+            <label class="auth-field">
+                <span>来源域 (Origin，可选)</span>
+                <input @bind="_origin" placeholder="http://36.103.234.13:19091/" />
+            </label>
+
+            <hr />
+
+            <label class="auth-field">
+                <span>管理员用户名</span>
+                <input @bind="_username" autocomplete="username" placeholder="例如：admin" />
+            </label>
+
+            <label class="auth-field">
+                <span>管理员邮箱（用于登录）</span>
+                <input type="email" @bind="_email" placeholder="admin@example.com" />
+            </label>
+
+            <label class="auth-field">
+                <span>管理员密码（≥ 6 位）</span>
+                <input type="password" @bind="_password" autocomplete="new-password" />
+            </label>
+
+            @if (!string.IsNullOrWhiteSpace(_message))
+            {
+                <div class="auth-message @(_isError ? "auth-message--error" : "auth-message--ok")">@_message</div>
+            }
+
+            <button type="submit" disabled="@_busy">
+                @(_busy ? "验证连接中..." : "验证并创建租户")
+            </button>
+        </form>
+    }
+</div>
+
+@code {
+    private string _tenantName = string.Empty;
+    private string _endpoint = "ws://36.103.234.13:19091/ws";
+    private string _token = string.Empty;
+    private string _origin = "http://36.103.234.13:19091/";
+    private string _username = string.Empty;
+    private string _email = string.Empty;
+    private string _password = string.Empty;
+
+    private string? _message;
+    private bool _isError;
+    private bool _busy;
+    private bool _completed;
+    private CreateAdminResult? _result;
+
+    private async Task HandleAsync()
+    {
+        _busy = true;
+        _message = null;
+        _isError = false;
+
+        try
+        {
+            // 1. 校验网关连接
+            var connection = new OpenclawConnectionOptions
+            {
+                Endpoint = _endpoint.Trim(),
+                Token = _token.Trim(),
+                Origin = string.IsNullOrWhiteSpace(_origin) ? null : _origin.Trim(),
+                SessionKey = "main",
+            };
+
+            await using var probe = new OpenclawWsClient();
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await probe.ConnectAsync(connection, cts.Token);
+            }
+            catch (Exception ex)
+            {
+                _isError = true;
+                _message = $"网关连接验证失败：{ex.Message}";
+                return;
+            }
+            finally
+            {
+                try { await probe.DisconnectAsync(); } catch { }
+            }
+
+            // 2. 创建租户 + 管理员
+            _result = Users.CreateTenantWithAdmin(
+                _tenantName,
+                connection.Endpoint!,
+                connection.Token!,
+                connection.Origin,
+                _username,
+                _email,
+                _password);
+
+            if (!_result.Success)
+            {
+                _isError = true;
+                _message = _result.Message;
+                _result = null;
+                return;
+            }
+
+            _completed = true;
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"初始化失败：{ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

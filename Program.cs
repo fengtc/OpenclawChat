@@ -8,6 +8,11 @@ builder.Services.AddServerSideBlazor();
 builder.Services.Configure<OpenclawConnectionOptions>(builder.Configuration.GetSection("OpenclawConnection"));
 builder.Services.AddScoped<OpenclawWsClient>();
 
+var dbPath = builder.Configuration["UserStore:DatabasePath"]
+    ?? Path.Combine(AppContext.BaseDirectory, "openclaw-chat.db");
+builder.Services.AddSingleton<UserStore>(_ => new UserStore(dbPath));
+builder.Services.AddScoped<AuthState>();
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
