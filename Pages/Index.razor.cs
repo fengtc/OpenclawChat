@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Options;
 using Microsoft.JSInterop;
+using Markdig;
 using OpenclawChat.Models;
 using OpenclawChat.Services;
 
@@ -27,6 +28,12 @@ public partial class Index : ComponentBase, IDisposable
 
     private static readonly Regex SilentReplyRegex = new("^\\s*NO_REPLY\\s*$", RegexOptions.Compiled);
     private static readonly Regex InviteUsernameFilterRegex = new("[^A-Za-z0-9_\\-]", RegexOptions.Compiled);
+    private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
+        .UsePipeTables()
+        .UseGridTables()
+        .UseAdvancedExtensions()
+        .DisableHtml()
+        .Build();
     private static readonly Regex ThinkingTagRegex = new(
         "<\\s*think(?:ing)?\\s*>([\\s\\S]*?)<\\s*/\\s*think(?:ing)?\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -77,7 +84,9 @@ public partial class Index : ComponentBase, IDisposable
     private bool _useStreaming = true;
     private bool _showToken;
     private bool _showPassword;
-    private readonly bool _useGatewayEventStreaming = false;
+    // 启用网关 chat/agent 事件的真流式：以 sessionKey 匹配，通过 chat.state="final" 信号结束。
+    private readonly bool _useGatewayEventStreaming = true;
+    private TaskCompletionSource<string>? _runCompletionTcs;
 
     private void OnDisplayToggleChanged()
     {
@@ -144,7 +153,7 @@ public partial class Index : ComponentBase, IDisposable
             return;
         }
 
-        var sessionKey = Auth.CurrentUser!.AgentName;
+        var sessionKey = BuildDefaultGatewaySessionKey(Auth.CurrentUser!.AgentName);
 
         _connection = new OpenclawConnectionOptions
         {
@@ -698,17 +707,21 @@ public partial class Index : ComponentBase, IDisposable
         await InvokeAsync(StateHasChanged);
 
         var runId = Guid.NewGuid().ToString("N");
+        TaskCompletionSource<string>? completionTcs = null;
         if (_useGatewayEventStreaming && _useStreaming)
         {
             _chatRunId = runId;
             _chatStream = string.Empty;
             _chatStreamStartedAt = now;
+            completionTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _runCompletionTcs = completionTcs;
         }
         else
         {
             _chatRunId = null;
             _chatStream = null;
             _chatStreamStartedAt = null;
+            _runCompletionTcs = null;
         }
 
         var apiAttachments = hasAttachments
@@ -735,10 +748,12 @@ public partial class Index : ComponentBase, IDisposable
                 _chatRunId = ack.RunId;
             }
 
-            var found = await WaitForAssistantReplyViaHistoryAsync(now, animateText: _useStreaming);
-            if (!found)
+            var found = completionTcs is not null
+                ? await WaitForGatewayStreamingReplyAsync(now, completionTcs)
+                : await WaitForAssistantReplyViaHistoryAsync(now, animateText: _useStreaming);
+
+            if (!found && string.IsNullOrWhiteSpace(_error))
             {
-                _error = null;
                 _chatMessages.Add(BuildAssistantTextMessage("暂时没能回复，请稍后再试。"));
             }
 
@@ -774,6 +789,7 @@ public partial class Index : ComponentBase, IDisposable
         }
         finally
         {
+            _runCompletionTcs = null;
             _chatSending = false;
             _waitingForAssistantReply = false;
             _activeWaitingRound = null;
@@ -781,7 +797,55 @@ public partial class Index : ComponentBase, IDisposable
             await InvokeAsync(StateHasChanged);
         }
     }
-    private async Task<bool> WaitForAssistantReplyViaHistoryAsync(long requestStartedAt, bool animateText)
+
+    private async Task<bool> WaitForGatewayStreamingReplyAsync(
+        long requestStartedAt,
+        TaskCompletionSource<string> completionTcs)
+    {
+        using var historyCts = new CancellationTokenSource();
+        var completionTask = completionTcs.Task;
+        var historyTask = WaitForAssistantReplyViaHistoryAsync(
+            requestStartedAt,
+            animateText: false,
+            historyCts.Token);
+        var timeoutTask = Task.Delay(NonStreamingHistoryTimeout);
+
+        var winner = await Task.WhenAny(completionTask, historyTask, timeoutTask);
+
+        if (winner == completionTask)
+        {
+            historyCts.Cancel();
+            var endState = await completionTask;
+            return endState is "final" or "aborted";
+        }
+
+        if (winner == historyTask)
+        {
+            return await historyTask;
+        }
+
+        historyCts.Cancel();
+        if (!string.IsNullOrWhiteSpace(_chatStream) && !IsSilentReply(_chatStream))
+        {
+            var message = BuildAssistantTextMessage(_chatStream);
+            if (!ContainsEquivalentAssistantText(message))
+            {
+                _chatMessages.Add(message);
+            }
+
+            _lastSeenAssistantTs = Math.Max(
+                _lastSeenAssistantTs,
+                NormalizeTimestamp(GetLong(message, "timestamp")));
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> WaitForAssistantReplyViaHistoryAsync(
+        long requestStartedAt,
+        bool animateText,
+        CancellationToken cancellationToken = default)
     {
         var deadline = DateTimeOffset.UtcNow + NonStreamingHistoryTimeout;
         var skewBound = requestStartedAt - 120_000;
@@ -789,12 +853,16 @@ public partial class Index : ComponentBase, IDisposable
         var requestLowerBound = Math.Max(_lastSeenAssistantTs + 1, skewBound);
         long maxSeenTs = _lastSeenAssistantTs;
 
-        while (DateTimeOffset.UtcNow < deadline)
+        while (DateTimeOffset.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
         {
             ChatHistoryResponse? response;
             try
             {
-                response = await ChatClient.GetHistoryAsync(_connection.SessionKey, limit: 200);
+                response = await ChatClient.GetHistoryAsync(_connection.SessionKey, limit: 200, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
             }
             catch
             {
@@ -853,7 +921,15 @@ public partial class Index : ComponentBase, IDisposable
                     if (ContainsEquivalentAssistantMessage(candidate))
                     {
                         // Still seeing a previously rendered assistant message; keep polling for a new one.
-                        await Task.Delay(NonStreamingHistoryPollInterval);
+                        try
+                        {
+                            await Task.Delay(NonStreamingHistoryPollInterval, cancellationToken);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return false;
+                        }
+
                         continue;
                     }
 
@@ -871,7 +947,19 @@ public partial class Index : ComponentBase, IDisposable
                 }
             }
 
-            await Task.Delay(NonStreamingHistoryPollInterval);
+            try
+            {
+                await Task.Delay(NonStreamingHistoryPollInterval, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
         }
 
         // 超时未拿到本轮新回复：把已经看到的最大助手时间戳当作"已处理"基线，
@@ -950,6 +1038,20 @@ public partial class Index : ComponentBase, IDisposable
 
         return false;
     }
+
+    private bool ContainsEquivalentAssistantText(JsonObject candidate)
+    {
+        var candidateText = ExtractText(candidate);
+        if (string.IsNullOrWhiteSpace(candidateText))
+        {
+            return false;
+        }
+
+        return _chatMessages.Any((existing) =>
+            string.Equals(GetRole(existing), "assistant", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(ExtractText(existing), candidateText, StringComparison.Ordinal));
+    }
+
     private async Task AbortAsync()
     {
         if (!_connected)
@@ -1254,11 +1356,6 @@ public partial class Index : ComponentBase, IDisposable
     {
         _ = InvokeAsync(async () =>
         {
-            if (!_useGatewayEventStreaming)
-            {
-                return;
-            }
-
             var state = HandleChatEvent(args.Payload);
 
             if (state is "final" or "error" or "aborted")
@@ -1300,24 +1397,16 @@ public partial class Index : ComponentBase, IDisposable
             return null;
         }
 
-        var payloadSession = string.IsNullOrWhiteSpace(payload.SessionKey) ? null : payload.SessionKey;
-        if (!string.IsNullOrWhiteSpace(payloadSession)
-            && !string.Equals(payloadSession, _connection.SessionKey, StringComparison.Ordinal))
+        // 服务端生成的 runId 与客户端传入的 idempotencyKey 不同，因此不依赖 runId 严格匹配。
+        if (!IsCurrentSessionEvent(payload.SessionKey))
         {
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(payloadSession) && string.IsNullOrWhiteSpace(_chatRunId))
+        // 首个包含 runId 的事件采纳为本轮 run。
+        if (!string.IsNullOrWhiteSpace(payload.RunId) && string.IsNullOrWhiteSpace(_chatRunId))
         {
-            return null;
-        }
-
-        if (!string.IsNullOrWhiteSpace(payload.RunId)
-            && !string.IsNullOrWhiteSpace(_chatRunId)
-            && !string.Equals(payload.RunId, _chatRunId, StringComparison.Ordinal)
-            && !TryAdoptIncomingRunId(payload))
-        {
-            return null;
+            _chatRunId = payload.RunId;
         }
 
         if (payload.State == "delta")
@@ -1329,6 +1418,7 @@ public partial class Index : ComponentBase, IDisposable
                 if (current.Length == 0 || next.Length >= current.Length)
                 {
                     _chatStream = next;
+                    ScheduleAutoScroll();
                 }
             }
 
@@ -1340,7 +1430,16 @@ public partial class Index : ComponentBase, IDisposable
             var finalMessage = NormalizeFinalAssistantMessage(payload.Message);
             if (finalMessage is not null && !IsAssistantSilentReply(finalMessage))
             {
-                _chatMessages.Add(finalMessage);
+                if (!ContainsEquivalentAssistantText(finalMessage))
+                {
+                    _chatMessages.Add(finalMessage);
+                }
+
+                var ts = NormalizeTimestamp(GetLong(finalMessage, "timestamp"));
+                if (ts > 0)
+                {
+                    _lastSeenAssistantTs = Math.Max(_lastSeenAssistantTs, ts);
+                }
             }
             else if (!string.IsNullOrWhiteSpace(_chatStream) && !IsSilentReply(_chatStream))
             {
@@ -1350,6 +1449,7 @@ public partial class Index : ComponentBase, IDisposable
             _chatStream = null;
             _chatRunId = null;
             _chatStreamStartedAt = null;
+            _runCompletionTcs?.TrySetResult("final");
             return "final";
         }
 
@@ -1358,7 +1458,16 @@ public partial class Index : ComponentBase, IDisposable
             var normalizedMessage = NormalizeAbortedAssistantMessage(payload.Message);
             if (normalizedMessage is not null && !IsAssistantSilentReply(normalizedMessage))
             {
-                _chatMessages.Add(normalizedMessage);
+                if (!ContainsEquivalentAssistantText(normalizedMessage))
+                {
+                    _chatMessages.Add(normalizedMessage);
+                }
+
+                var ts = NormalizeTimestamp(GetLong(normalizedMessage, "timestamp"));
+                if (ts > 0)
+                {
+                    _lastSeenAssistantTs = Math.Max(_lastSeenAssistantTs, ts);
+                }
             }
             else if (!string.IsNullOrWhiteSpace(_chatStream) && !IsSilentReply(_chatStream))
             {
@@ -1368,6 +1477,7 @@ public partial class Index : ComponentBase, IDisposable
             _chatStream = null;
             _chatRunId = null;
             _chatStreamStartedAt = null;
+            _runCompletionTcs?.TrySetResult("aborted");
             return "aborted";
         }
 
@@ -1377,6 +1487,7 @@ public partial class Index : ComponentBase, IDisposable
             _chatRunId = null;
             _chatStreamStartedAt = null;
             _error = payload.ErrorMessage ?? "聊天错误";
+            _runCompletionTcs?.TrySetResult("error");
             return "error";
         }
 
@@ -1457,6 +1568,12 @@ public partial class Index : ComponentBase, IDisposable
             return;
         }
 
+        if (payload.Stream == "assistant")
+        {
+            HandleAssistantStreamEvent(payload);
+            return;
+        }
+
         if (payload.Stream != "tool")
         {
             return;
@@ -1525,6 +1642,57 @@ public partial class Index : ComponentBase, IDisposable
         entry.Message = BuildToolStreamMessage(entry);
         TrimToolStream();
         SyncToolStreamMessages();
+    }
+
+    private void HandleAssistantStreamEvent(GatewayAgentEventPayload payload)
+    {
+        // 仅处理当前会话的事件。
+        if (!IsCurrentSessionEvent(payload.SessionKey))
+        {
+            return;
+        }
+
+        if (payload.Data.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        // data.text 是累计全文，data.delta 是增量。优先使用 data.text。
+        string? text = null;
+        if (payload.Data.TryGetProperty("text", out var textEl) && textEl.ValueKind == JsonValueKind.String)
+        {
+            text = textEl.GetString();
+        }
+        else if (payload.Data.TryGetProperty("delta", out var deltaEl) && deltaEl.ValueKind == JsonValueKind.String)
+        {
+            var delta = deltaEl.GetString();
+            if (!string.IsNullOrEmpty(delta))
+            {
+                text = (_chatStream ?? string.Empty) + delta;
+            }
+        }
+
+        if (string.IsNullOrEmpty(text) || IsSilentReply(text))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_chatRunId) && !string.IsNullOrWhiteSpace(payload.RunId))
+        {
+            _chatRunId = payload.RunId;
+        }
+
+        if (_chatStreamStartedAt is null && payload.Ts > 0)
+        {
+            _chatStreamStartedAt = payload.Ts;
+        }
+
+        var current = _chatStream ?? string.Empty;
+        if (text.Length >= current.Length)
+        {
+            _chatStream = text;
+            ScheduleAutoScroll();
+        }
     }
 
     private void HandleCompactionEvent(GatewayAgentEventPayload payload)
@@ -1671,8 +1839,7 @@ public partial class Index : ComponentBase, IDisposable
     {
         var sessionKey = string.IsNullOrWhiteSpace(payload.SessionKey) ? null : payload.SessionKey;
 
-        if (!string.IsNullOrWhiteSpace(sessionKey)
-            && !string.Equals(sessionKey, _connection.SessionKey, StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(sessionKey) && !IsCurrentSessionEvent(sessionKey))
         {
             return (false, null);
         }
@@ -1701,6 +1868,30 @@ public partial class Index : ComponentBase, IDisposable
         }
 
         return (true, sessionKey);
+    }
+
+    private bool IsCurrentSessionEvent(string? eventSessionKey)
+    {
+        if (string.IsNullOrWhiteSpace(eventSessionKey))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            eventSessionKey.Trim(),
+            _connection.SessionKey.Trim(),
+            StringComparison.Ordinal);
+    }
+
+    private static string BuildDefaultGatewaySessionKey(string? agentName)
+    {
+        var value = agentName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(value) || value.StartsWith("agent:", StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        return $"agent:{value}:main";
     }
 
     private void TrimToolStream()
@@ -2089,6 +2280,16 @@ public partial class Index : ComponentBase, IDisposable
             "assistant" => "助手",
             _ => normalized,
         };
+    }
+
+    private static MarkupString RenderMarkdown(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return new MarkupString(string.Empty);
+        }
+
+        return new MarkupString(Markdown.ToHtml(markdown, MarkdownPipeline));
     }
 
     private static string NormalizeRoleForGrouping(string role)

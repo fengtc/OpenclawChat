@@ -155,7 +155,7 @@
                                 <div class="chat-avatar assistant">AI</div>
                                 <div class="chat-group-messages">
                                     <div class="chat-bubble streaming">
-                                        <div class="chat-text"><pre>@stream.Text</pre></div>
+                                        <div class="chat-text">@RenderMarkdown(stream.Text)</div>
                                     </div>
                                     <div class="chat-group-footer">
                                         <span class="chat-sender-name">助手</span>
@@ -289,7 +289,7 @@
 
                                             @if (!string.IsNullOrWhiteSpace(text))
                                             {
-                                                <div class="chat-text"><pre>@text</pre></div>
+                                                <div class="chat-text">@RenderMarkdown(text)</div>
                                             }
                                         </div>
                                     }

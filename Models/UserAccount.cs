@@ -13,7 +13,7 @@ public sealed class UserAccount
     /// <summary>未激活时为空。Base64(salt) + ":" + Base64(PBKDF2 hash)。</summary>
     public string? PasswordHash { get; set; }
 
-    /// <summary>对应 OpenClaw agent 名（与 sessionKey 等同）。</summary>
+    /// <summary>对应 OpenClaw agent 名。Gateway 会话默认使用 agent:{AgentName}:main。</summary>
     public required string AgentName { get; set; }
 
     public bool IsAdmin { get; set; }

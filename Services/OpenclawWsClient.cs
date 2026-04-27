@@ -608,9 +608,11 @@ public sealed class OpenclawWsClient : IAsyncDisposable
             return;
         }
 
+        long? eventSeq = null;
         if (root.TryGetProperty("seq", out var seqProperty) && seqProperty.ValueKind == JsonValueKind.Number)
         {
             var seq = seqProperty.GetInt64();
+            eventSeq = seq;
             if (_lastEventSeq.HasValue && seq > _lastEventSeq.Value + 1)
             {
                 EventGapDetected?.Invoke(this, new EventGapDetectedEventArgs(_lastEventSeq.Value + 1, seq));

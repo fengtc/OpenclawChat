@@ -192,7 +192,7 @@ internal sealed class GatewayConnectParams
     public string Role { get; set; } = "operator";
 
     [JsonPropertyName("scopes")]
-    public List<string> Scopes { get; set; } = ["operator.admin", "operator.approvals", "operator.pairing"];
+    public List<string> Scopes { get; set; } = ["operator.read", "operator.write", "operator.admin", "operator.approvals", "operator.pairing"];
 
     [JsonPropertyName("auth")]
     public GatewayConnectAuth? Auth { get; set; }
