@@ -2,13 +2,14 @@
 @inject UserStore Users
 @inject AuthState Auth
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>登录 - OpenClaw Chat</PageTitle>
 
 <div class="auth-shell">
     <form class="auth-card" @onsubmit="HandleLogin" @onsubmit:preventDefault>
         <h1>登录</h1>
-        <p class="auth-hint">使用账号邮箱登录。系统会根据邮箱自动定位你所属的租户。</p>
+        <p class="auth-hint">使用账号邮箱登录。</p>
 
         <label class="auth-field">
             <span>邮箱</span>
@@ -28,39 +29,71 @@
         <button type="submit" disabled="@_busy">@(_busy ? "登录中..." : "登录")</button>
 
         <div class="auth-foot">
-            <span>没有账号？请联系所在租户的管理员邀请你，或 <a href="/setup">注册新租户</a>。</span>
+            <span>没有账号？请联系管理员邀请你，或 <a href="/setup">注册新租户</a>。</span>
         </div>
     </form>
 </div>
 
 @code {
+    private const string LastEmailStorageKey = "openclaw.lastLoginEmail";
+
     private string _email = string.Empty;
     private string _password = string.Empty;
     private string? _message;
     private bool _isError;
     private bool _busy;
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && Auth.IsAuthenticated)
+        if (!firstRender)
+        {
+            return;
+        }
+
+        if (Auth.IsAuthenticated)
         {
             Nav.NavigateTo("/chat", replace: true);
+            return;
+        }
+
+        try
+        {
+            var saved = await JS.InvokeAsync<string?>("localStorage.getItem", LastEmailStorageKey);
+            if (!string.IsNullOrWhiteSpace(saved) && string.IsNullOrEmpty(_email))
+            {
+                _email = saved;
+                StateHasChanged();
+            }
+        }
+        catch
+        {
+            // ignore storage errors
         }
     }
 
-    private void HandleLogin()
+    private async Task HandleLogin()
     {
         _busy = true;
         _message = null;
         _isError = false;
         try
         {
-            var result = Users.Authenticate(_email.Trim(), _password);
+            var email = _email.Trim();
+            var result = Users.Authenticate(email, _password);
             if (!result.Success || result.User is null)
             {
                 _isError = true;
                 _message = result.Message;
                 return;
+            }
+
+            try
+            {
+                await JS.InvokeVoidAsync("localStorage.setItem", LastEmailStorageKey, email);
+            }
+            catch
+            {
+                // ignore storage errors
             }
 
             Auth.SignIn(result.User);

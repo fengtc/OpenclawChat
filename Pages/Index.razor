@@ -22,6 +22,8 @@
                 <span>已登录：<strong>@Auth.CurrentUser.Username</strong></span>
                 <span> · </span>
                 <span>Agent: <code>@Auth.CurrentUser.AgentName</code></span>
+                <span> · </span>
+                <a href="javascript:void(0)" class="hint-link" @onclick="SignOut" @onclick:preventDefault>注销</a>
             }
         </p>
 
@@ -32,7 +34,7 @@
             <label>会话标识 (Agent)</label>
             @if (Auth.IsAdmin)
             {
-                <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync">
+                <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync" disabled="@_connected">
                     @foreach (var sessionKey in _sessionKeys)
                     {
                         <option value="@sessionKey">@sessionKey</option>
@@ -80,7 +82,6 @@
             {
                 <button class="ghost" @onclick="OpenUserMgmt">用户管理</button>
             }
-            <button class="ghost" @onclick="SignOut">注销</button>
         </div>
 
         <div class="status-box">

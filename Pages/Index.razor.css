@@ -159,6 +159,13 @@
     line-height: 1.5;
 }
 
+.hint-link {
+    color: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
 .form-grid {
     display: grid;
     grid-template-columns: 1fr;
