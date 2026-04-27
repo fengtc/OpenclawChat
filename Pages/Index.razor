@@ -466,7 +466,15 @@
                 </p>
 
                 <div class="invite-form">
-                    <input @bind="_inviteUsername" placeholder="用户名 (例如：work)" />
+                    <input value="@_inviteUsername"
+                           @oninput="OnInviteUsernameInput"
+                           placeholder="用户名 (字母开头，字母/数字/_/-，2-31)"
+                           pattern="[A-Za-z][A-Za-z0-9_\-]{1,30}"
+                           maxlength="31"
+                           autocomplete="off"
+                           inputmode="latin"
+                           lang="en"
+                           title="仅允许字母、数字、下划线、横线，且以字母开头，长度 2-31，不能含中文" />
                     <input @bind="_inviteEmail" placeholder="邮箱（全局唯一）" type="email" />
                     <button type="button" @onclick="InviteAsync">生成邀请链接</button>
                 </div>

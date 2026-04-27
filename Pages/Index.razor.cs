@@ -26,6 +26,7 @@ public partial class Index : ComponentBase, IDisposable
     private static readonly TimeSpan NonStreamingHistoryPollInterval = TimeSpan.FromMilliseconds(800);
 
     private static readonly Regex SilentReplyRegex = new("^\\s*NO_REPLY\\s*$", RegexOptions.Compiled);
+    private static readonly Regex InviteUsernameFilterRegex = new("[^A-Za-z0-9_\\-]", RegexOptions.Compiled);
     private static readonly Regex ThinkingTagRegex = new(
         "<\\s*think(?:ing)?\\s*>([\\s\\S]*?)<\\s*/\\s*think(?:ing)?\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -254,6 +255,17 @@ public partial class Index : ComponentBase, IDisposable
     private void CloseUserMgmt()
     {
         _userMgmtOpen = false;
+    }
+
+    private void OnInviteUsernameInput(ChangeEventArgs e)
+    {
+        var raw = e.Value?.ToString() ?? string.Empty;
+        var filtered = InviteUsernameFilterRegex.Replace(raw, string.Empty);
+        if (filtered.Length > 31)
+        {
+            filtered = filtered[..31];
+        }
+        _inviteUsername = filtered;
     }
 
     private void InviteAsync()
@@ -1987,6 +1999,10 @@ public partial class Index : ComponentBase, IDisposable
             {
                 items.Add(new ChatReadingIndicatorItem());
             }
+        }
+        else if (_waitingForAssistantReply)
+        {
+            items.Add(new ChatReadingIndicatorItem());
         }
 
         return GroupMessages(items);
