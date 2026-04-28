@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Globalization;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
@@ -61,7 +62,8 @@ public partial class Index : ComponentBase, IDisposable
     private readonly HashSet<string> _refreshSessionsAfterChat = [];
     private readonly List<ChatAttachment> _attachments = [];
     private readonly List<string> _sessionKeys = [];
-    private bool _loadingSessions;
+    private string _sessionSearch = string.Empty;
+    private DateTime? _sessionDateFilter;
     private int _requestRoundCounter;
     private int? _activeWaitingRound;
     private bool _waitingForAssistantReply;
@@ -72,6 +74,8 @@ public partial class Index : ComponentBase, IDisposable
     private string? _error;
     private bool _connected;
     private bool _connecting;
+    private bool _autoConnectStarted;
+    private bool _initialHistoryLoadStarted;
     private bool _chatLoading;
     private bool _chatSending;
     private string _chatMessage = string.Empty;
@@ -134,6 +138,32 @@ public partial class Index : ComponentBase, IDisposable
 
     private bool IsBusy => _chatSending || _chatStream is not null;
 
+    private IReadOnlyList<string> AllowedSessionKeys => _sessionKeys
+        .Where(IsSessionAllowedForCurrentUser)
+        .OrderByDescending(GetSessionSortTimestamp)
+        .ThenBy((key) => key, StringComparer.Ordinal)
+        .ToList();
+
+    private IReadOnlyList<string> VisibleSessionKeys
+    {
+        get
+        {
+            var current = _connection.SessionKey?.Trim();
+            var filtered = AllowedSessionKeys
+                .Where(MatchesSessionFilters)
+                .Where((key) => !string.Equals(key, current, StringComparison.Ordinal))
+                .Take(29)
+                .ToList();
+
+            if (!string.IsNullOrWhiteSpace(current) && IsSessionAllowedForCurrentUser(current))
+            {
+                filtered.Insert(0, current);
+            }
+
+            return filtered;
+        }
+    }
+
     private string WaitingRoundLabel => _activeWaitingRound.HasValue
         ? $"正在等待第 {_activeWaitingRound.Value} 轮回复..."
         : "正在等待回复...";
@@ -184,6 +214,8 @@ public partial class Index : ComponentBase, IDisposable
 
         if (firstRender)
         {
+            UseDefaultMainSessionKey();
+
             try
             {
                 await JS.InvokeVoidAsync("openclawChat.bindComposerSubmit", _chatComposerRef, _chatSubmitButtonRef);
@@ -204,6 +236,26 @@ public partial class Index : ComponentBase, IDisposable
             }
             catch (JSException)
             {
+            }
+
+            if (!_connected && !_connecting && !_autoConnectStarted)
+            {
+                _autoConnectStarted = true;
+                await ConnectAsync();
+                ScheduleComposerFocus();
+                StateHasChanged();
+            }
+            else if (_connected && !_initialHistoryLoadStarted)
+            {
+                _initialHistoryLoadStarted = true;
+                UseDefaultMainSessionKey();
+                EnsureSessionKeyOption(_connection.SessionKey);
+                await LoadSessionKeysAsync();
+                ResetChatScroll();
+                await LoadHistoryAsync();
+                ScheduleAutoScroll(force: true);
+                ScheduleComposerFocus();
+                StateHasChanged();
             }
         }
 
@@ -326,10 +378,7 @@ public partial class Index : ComponentBase, IDisposable
         _connecting = true;
         _error = null;
 
-        if (string.IsNullOrWhiteSpace(_connection.SessionKey))
-        {
-            _connection.SessionKey = "main";
-        }
+        UseDefaultMainSessionKey();
 
         // 多租户模式下网关凭据来自 tenants 表，由初始化时录入；连接面板中管理员仍可临时修改本会话使用的值，但不再回写持久化。
 
@@ -337,6 +386,7 @@ public partial class Index : ComponentBase, IDisposable
         {
             await ChatClient.ConnectAsync(_connection);
             _connected = true;
+            _initialHistoryLoadStarted = true;
             EnsureSessionKeyOption(_connection.SessionKey);
             await LoadSessionKeysAsync();
             ResetChatScroll();
@@ -369,7 +419,6 @@ public partial class Index : ComponentBase, IDisposable
             _activeWaitingRound = null;
             _lastSeenAssistantTs = 0;
             ResetToolStream();
-            _loadingSessions = false;
         }
         catch (Exception ex)
         {
@@ -408,6 +457,12 @@ public partial class Index : ComponentBase, IDisposable
 
         EnsureSessionKeyOption(selected);
 
+        if (!IsSessionAllowedForCurrentUser(selected))
+        {
+            _error = "不能切换到其它 Agent 的会话。";
+            return;
+        }
+
         if (string.Equals(_connection.SessionKey, selected, StringComparison.Ordinal))
         {
             return;
@@ -440,13 +495,15 @@ public partial class Index : ComponentBase, IDisposable
             return;
         }
 
-        _loadingSessions = true;
         try
         {
             var keys = await ChatClient.ListSessionKeysAsync();
             foreach (var key in keys)
             {
-                EnsureSessionKeyOption(key);
+                if (Auth.IsAdmin || IsSessionAllowedForCurrentUser(key))
+                {
+                    EnsureSessionKeyOption(key);
+                }
             }
 
             EnsureSessionKeyOption(_connection.SessionKey);
@@ -454,10 +511,6 @@ public partial class Index : ComponentBase, IDisposable
         catch (Exception ex)
         {
             _error = $"加载会话失败：{ex.Message}";
-        }
-        finally
-        {
-            _loadingSessions = false;
         }
     }
 
@@ -549,7 +602,29 @@ public partial class Index : ComponentBase, IDisposable
 
     private async Task NewSessionAsync()
     {
-        await HandleSendChatAsync("/new", restoreDraft: true);
+        if (!_connected || IsBusy)
+        {
+            return;
+        }
+
+        var newSessionKey = BuildNewGatewaySessionKey(Auth.CurrentUser?.AgentName, _connection.SessionKey);
+        _connection.SessionKey = newSessionKey;
+        EnsureSessionKeyOption(newSessionKey);
+
+        _chatMessages.Clear();
+        _chatToolMessages.Clear();
+        _chatQueue.Clear();
+        _attachments.Clear();
+        ResetToolStream();
+        ResetChatScroll();
+        _lastSeenAssistantTs = 0;
+        _error = null;
+        _chatThinkingLevel = null;
+        _chatMessage = string.Empty;
+
+        await RefreshSessionsAsync();
+        ScheduleAutoScroll(force: true);
+        ScheduleComposerFocus();
     }
 
     private async Task HandleSendChatAsync(string? messageOverride = null, bool restoreDraft = false)
@@ -1131,7 +1206,7 @@ public partial class Index : ComponentBase, IDisposable
     {
         if (!_connected)
         {
-            return "请先连接网关后再开始聊天...";
+            return _connecting ? "正在连接网关..." : "网关未连接，请稍后再试...";
         }
 
         if (_attachments.Count > 0)
@@ -1277,7 +1352,6 @@ public partial class Index : ComponentBase, IDisposable
                 _chatStreamStartedAt = null;
                 _waitingForAssistantReply = false;
                 _activeWaitingRound = null;
-                _loadingSessions = false;
                 ResetToolStream();
             }
 
@@ -1828,12 +1902,147 @@ public partial class Index : ComponentBase, IDisposable
     private static string BuildDefaultGatewaySessionKey(string? agentName)
     {
         var value = agentName?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(value) || value.StartsWith("agent:", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(value))
         {
-            return value;
+            return "agent:main:main";
+        }
+
+        if (value.StartsWith("agent:", StringComparison.Ordinal))
+        {
+            var agent = ExtractAgentName(value);
+            return string.IsNullOrWhiteSpace(agent)
+                ? "agent:main:main"
+                : $"agent:{agent}:main";
         }
 
         return $"agent:{value}:main";
+    }
+
+    private void UseDefaultMainSessionKey()
+    {
+        var defaultSessionKey = BuildDefaultGatewaySessionKey(Auth.CurrentUser?.AgentName);
+        if (string.IsNullOrWhiteSpace(defaultSessionKey))
+        {
+            return;
+        }
+
+        _connection.SessionKey = defaultSessionKey;
+        EnsureSessionKeyOption(defaultSessionKey);
+    }
+
+    private static string BuildNewGatewaySessionKey(string? agentName, string? currentSessionKey)
+    {
+        var agent = ExtractAgentName(currentSessionKey);
+        if (string.IsNullOrWhiteSpace(agent))
+        {
+            agent = agentName?.Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(agent))
+        {
+            agent = "main";
+        }
+
+        var timestamp = DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss");
+        var suffix = Guid.NewGuid().ToString("N")[..6];
+        return $"agent:{agent}:{timestamp}-{suffix}";
+    }
+
+    private static string? ExtractAgentName(string? sessionKey)
+    {
+        var value = sessionKey?.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var parts = value.Split(':', 3, StringSplitOptions.TrimEntries);
+        if (parts.Length >= 2 && string.Equals(parts[0], "agent", StringComparison.Ordinal))
+        {
+            return string.IsNullOrWhiteSpace(parts[1]) ? null : parts[1];
+        }
+
+        return value.StartsWith("agent:", StringComparison.Ordinal) ? null : value;
+    }
+
+    private bool IsSessionAllowedForCurrentUser(string? sessionKey)
+    {
+        if (string.IsNullOrWhiteSpace(sessionKey))
+        {
+            return false;
+        }
+
+        if (Auth.IsAdmin)
+        {
+            return true;
+        }
+
+        var currentAgent = Auth.CurrentUser?.AgentName?.Trim();
+        if (string.IsNullOrWhiteSpace(currentAgent))
+        {
+            return false;
+        }
+
+        return string.Equals(ExtractAgentName(sessionKey), currentAgent, StringComparison.Ordinal);
+    }
+
+    private bool IsCurrentSessionKey(string sessionKey)
+    {
+        return string.Equals(sessionKey, _connection.SessionKey?.Trim(), StringComparison.Ordinal);
+    }
+
+    private bool MatchesSessionFilters(string sessionKey)
+    {
+        if (!string.IsNullOrWhiteSpace(_sessionSearch)
+            && !sessionKey.Contains(_sessionSearch.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (_sessionDateFilter.HasValue)
+        {
+            var sessionDate = ExtractSessionDate(sessionKey);
+            var selectedDate = _sessionDateFilter.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            if (!string.Equals(sessionDate, selectedDate, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static DateTime GetSessionSortTimestamp(string sessionKey)
+    {
+        return TryExtractSessionTimestamp(sessionKey, out var timestamp)
+            ? timestamp
+            : DateTime.MinValue;
+    }
+
+    private static string? ExtractSessionDate(string sessionKey)
+    {
+        return TryExtractSessionTimestamp(sessionKey, out var timestamp)
+            ? timestamp.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : null;
+    }
+
+    private static bool TryExtractSessionTimestamp(string sessionKey, out DateTime timestamp)
+    {
+        timestamp = default;
+        var value = sessionKey.Trim();
+        var tail = value.Split(':', StringSplitOptions.TrimEntries).LastOrDefault();
+        if (string.IsNullOrWhiteSpace(tail) || tail.Length < 15)
+        {
+            return false;
+        }
+
+        var candidate = tail[..15];
+        return DateTime.TryParseExact(
+            candidate,
+            "yyyyMMdd-HHmmss",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out timestamp);
     }
 
     private void TrimToolStream()

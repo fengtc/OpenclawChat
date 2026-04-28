@@ -32,19 +32,25 @@
             <input @bind="_connection.Endpoint" placeholder="ws://localhost:3000/ws" disabled="@(_connected || !Auth.IsAdmin)" />
 
             <label>会话标识</label>
-            @if (Auth.IsAdmin)
-            {
-                <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync" disabled="@IsBusy">
-                    @foreach (var sessionKey in _sessionKeys)
+            <div class="session-picker">
+                <div class="session-picker__filters">
+                    <input type="date" @bind="_sessionDateFilter" @bind:format="yyyy-MM-dd" disabled="@IsBusy" />
+                    <input @bind="_sessionSearch" @bind:event="oninput" placeholder="搜索会话" disabled="@IsBusy" />
+                </div>
+                <select @key="_connection.SessionKey" @onchange="OnSessionChangedAsync" disabled="@IsBusy">
+                    @foreach (var sessionKey in VisibleSessionKeys)
                     {
-                        <option value="@sessionKey">@sessionKey</option>
+                        <option value="@sessionKey" selected="@IsCurrentSessionKey(sessionKey)">@sessionKey</option>
                     }
                 </select>
-            }
-            else
-            {
-                <input value="@_connection.SessionKey" readonly disabled />
-            }
+                <div class="session-picker__meta">
+                    显示 @VisibleSessionKeys.Count / @AllowedSessionKeys.Count
+                    @if (!Auth.IsAdmin)
+                    {
+                        <span> · 仅当前 Agent</span>
+                    }
+                </div>
+            </div>
 
             @if (Auth.IsAdmin)
             {
@@ -70,14 +76,17 @@
         </div>
 
         <div class="config-actions">
-            <button @onclick="ConnectAsync" disabled="@(_connecting || _connected)">@(_connected ? "已连接" : (_connecting ? "连接中..." : "连接"))</button>
-            <button class="ghost" @onclick="DisconnectAsync" disabled="@(!_connected)">断开</button>
-            <button class="ghost" @onclick="NewSessionAsync" disabled="@(!_connected || IsBusy)">新会话</button>
-            @if (Auth.IsAdmin)
-            {
-                <button class="ghost" @onclick="RefreshSessionsAsync" disabled="@(!_connected || _loadingSessions || IsBusy)">@(_loadingSessions ? "会话加载中..." : "刷新会话")</button>
-                <button class="ghost" @onclick="OpenUserMgmt">用户管理</button>
-            }
+            <div class="config-actions__row">
+                <button class="control-button control-button--secondary"
+                        @onclick="NewSessionAsync"
+                        disabled="@(!_connected || IsBusy)">
+                    新会话
+                </button>
+                @if (Auth.IsAdmin)
+                {
+                    <button class="control-button control-button--secondary control-button--admin" @onclick="OpenUserMgmt">用户管理</button>
+                }
+            </div>
         </div>
 
         <div class="status-box">

@@ -217,6 +217,23 @@
     cursor: not-allowed;
 }
 
+.session-picker {
+    display: grid;
+    gap: 0.45rem;
+}
+
+.session-picker__filters {
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    gap: 0.45rem;
+}
+
+.session-picker__meta {
+    font-size: 0.75rem;
+    color: #64748b;
+    line-height: 1.35;
+}
+
 .input-reveal {
     position: relative;
     display: flex;
@@ -277,10 +294,80 @@
 }
 
 .config-actions {
-    display: flex;
+    display: grid;
+    gap: 0.55rem;
+    margin-top: 1.15rem;
+}
+
+.config-actions__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.5rem;
-    margin-top: 1.1rem;
-    flex-wrap: wrap;
+}
+
+.control-button {
+    min-height: 38px;
+    border-radius: 999px;
+    padding: 0.48rem 0.78rem;
+    font-size: 0.84rem;
+    letter-spacing: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.42rem;
+    box-shadow: none;
+}
+
+.control-button--connect {
+    background: #eef6ff;
+    border: 1px solid #bfdbfe;
+    color: #1d4ed8;
+}
+
+.control-button--connect:hover:not(:disabled) {
+    background: #dbeafe;
+    border-color: #93c5fd;
+    box-shadow: 0 6px 14px -12px rgba(37, 99, 235, 0.55);
+}
+
+.control-button--connected,
+.control-button--connected:disabled {
+    background: #ecfdf5;
+    border: 1px solid #bbf7d0;
+    color: #047857;
+    opacity: 1;
+}
+
+.control-button--secondary {
+    background: #ffffff;
+    color: #334155;
+    border: 1px solid #d8dfeb;
+}
+
+.control-button--secondary:hover:not(:disabled) {
+    background: #f8fafc;
+    border-color: #b7c2d2;
+    box-shadow: 0 4px 12px -10px rgba(15, 23, 42, 0.35);
+}
+
+.config-actions .control-button,
+.control-button--admin {
+    grid-column: 1 / -1;
+}
+
+.control-button__dot {
+    width: 0.48rem;
+    height: 0.48rem;
+    border-radius: 999px;
+    background: #94a3b8;
+}
+
+.control-button--connect:not(.control-button--connected) .control-button__dot {
+    background: #3b82f6;
+}
+
+.control-button--connected .control-button__dot {
+    background: #10b981;
 }
 
 .status-box {

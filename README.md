@@ -1,38 +1,187 @@
-# OpenClaw WebChat (Blazor Server)
+# OpenClaw Chat
 
-基于 Blazor Server 实现，按 OpenClaw 最新 WebUI 交互逻辑对齐 Gateway 协议。
+OpenClaw Chat 是一个基于 Blazor Server 的 OpenClaw 网页聊天客户端，直接连接 OpenClaw Gateway WebSocket，提供登录、多用户、会话历史、后端真流式输出、工具流展示和 Markdown 渲染。
 
-## 握手兼容策略
-- 建连后会短等待 `connect.challenge`（约 750ms）；若未收到会直接继续发送 `connect`。
-- 仅通过 WebSocket `Origin` 请求头处理跨域校验，不在 `connect.params` 里发送 `origin`（兼容严格 schema 的网关版本）。
-## 协议对齐
-- 握手：`connect.challenge` -> `connect`
-- RPC：`chat.history` / `chat.send` / `chat.abort`
-- 事件：`chat`（`delta/final/aborted/error`）+ `agent`（`tool/compaction/fallback`）
+## 主要能力
 
-## 已复刻交互细节
-- 流式渲染与 reading indicator
-- `NO_REPLY` 过滤策略
-- 队列发送（busy 时 Queue）
-- Stop/New session 行为
-- Tool stream 卡片与侧边栏详情
-- Compaction/Fallback 状态提示
-- 自动滚动与 New messages 提示
-- 图片附件上传与预览发送
+- 登录后自动连接网关，无需手动点击连接。
+- 默认进入当前用户 Agent 的主会话，例如 `agent:main:main`、`agent:qq:main`。
+- 支持 OpenClaw 后端真流式输出，按 `chat` / `agent` 事件实时更新。
+- 支持会话历史读取，调用后端 `chat.history`，当前页面默认拉取最近 200 条。
+- 支持按日期、关键词筛选会话标识。
+- 管理员可查看全部会话；普通用户只能查看自己 Agent 下的会话。
+- “新会话”不会发送 `/new`，而是生成新的日期会话，例如 `agent:qq:20260428-164530-a1b2c3`，避免清空主会话历史。
+- 支持 Markdown 表格、代码块、列表等渲染。
+- 支持显示/隐藏思考、显示/隐藏工具流。
+- 支持图片附件、复制回复到输入框、停止当前回复。
+- 支持租户初始化、管理员登录、邀请普通用户、激活账号。
+
+## 技术栈
+
+- .NET / Blazor Server
+- OpenClaw Gateway WebSocket
+- SQLite 用户与租户存储
+- Markdig Markdown 渲染
+- ASP.NET Core Data Protection 本地密钥持久化
 
 ## 启动
+
 ```powershell
 dotnet run
 ```
 
-页面参数：
-- Gateway WS：`ws://localhost:3000/ws`
-- Session Key：`main`
-- Token/Password：按你的网关配置填写（可选）
+默认使用 HTTPS，本地页面通常为：
 
-## 常见连接错误
-- `invalid connect params: at /auth/password: must be string`
-  - 仅填 Token、不填 Password 即可；客户端现在会在 Password 为空时不发送该字段。
-- `origin not allowed`
-  - 先在页面的 `Origin (可选)` 填与你网关允许列表一致的值（例如 `http://localhost:3000`）。
-  - 若仍报错，请在 OpenClaw 网关配置中把该 Origin 加入 `gateway.controlUi.allowedOrigins`。
+```text
+https://localhost:7179
+```
+
+首次使用请打开：
+
+```text
+/setup
+```
+
+创建租户、管理员账号并填写 OpenClaw Gateway 信息。
+
+## 配置
+
+`appsettings.json` 中保留了默认网关配置结构：
+
+```json
+{
+  "OpenclawConnection": {
+    "Endpoint": "ws://claw.blsc.dev/ws",
+    "Token": "",
+    "Password": null,
+    "Origin": "https://claw.blsc.dev/",
+    "SessionKey": "main"
+  }
+}
+```
+
+多用户模式下，实际连接信息以 `/setup` 创建的租户数据为准，保存在 SQLite 数据库中。
+
+数据库路径默认：
+
+```text
+<应用输出目录>/openclaw-chat.db
+```
+
+可通过配置覆盖：
+
+```json
+{
+  "UserStore": {
+    "DatabasePath": "E:\\source\\OpenclawChat\\openclaw-chat.db"
+  }
+}
+```
+
+Data Protection 密钥保存在项目目录：
+
+```text
+.data-protection-keys/
+```
+
+这是为了避免 Blazor Server 在某些 Windows 浏览器环境下因用户目录权限导致页面一直转圈。
+
+## OpenClaw 协议
+
+客户端对齐以下 Gateway 方法和事件：
+
+- 握手：`connect.challenge` -> `connect`
+- RPC：`sessions.list`、`chat.history`、`chat.send`、`chat.abort`
+- 事件：`chat`、`agent`
+
+流式输出优先使用后端事件：
+
+- `agent` 事件中的 `stream=assistant`
+- `chat` 事件中的 `state=delta/final/aborted/error`
+
+历史兜底使用：
+
+```text
+chat.history
+```
+
+## 会话规则
+
+默认主会话格式：
+
+```text
+agent:{AgentName}:main
+```
+
+示例：
+
+```text
+agent:main:main
+agent:qq:main
+```
+
+新会话格式：
+
+```text
+agent:{AgentName}:yyyyMMdd-HHmmss-xxxxxx
+```
+
+示例：
+
+```text
+agent:qq:20260428-164530-a1b2c3
+```
+
+这样可以按日期筛选历史，同时避免 `/new` 重置当前后端历史。
+
+## 常见问题
+
+### 登录后页面一直转圈
+
+通常是 Data Protection 密钥目录权限问题。当前项目已配置为写入 `.data-protection-keys/`，请确认应用进程对项目目录有写权限。
+
+### 已连接但没有历史
+
+确认当前会话标识是否为对应 Agent 的主会话，例如：
+
+```text
+agent:qq:main
+```
+
+如果选择了日期会话，只会看到该日期会话的历史。
+
+### 表格没有渲染成表格
+
+项目使用 Markdig，并启用了 Pipe Tables / Grid Tables。Markdown 表格需要列数完整，例如：
+
+```markdown
+| 文件 | 用途 | 行数 |
+|------|------|------|
+| A.cs | 示例 | 10 |
+```
+
+### `origin not allowed`
+
+请在 `/setup` 或租户配置中填写后端允许的 Origin，例如：
+
+```text
+https://localhost:7179
+```
+
+同时确认 OpenClaw Gateway 的 allowed origins 配置包含该来源。
+
+### 邀请用户后还不能聊天
+
+用户管理会生成后端 agent 创建命令，例如：
+
+```text
+openclaw agents add qq --workspace ~/.openclaw/workspace-qq
+```
+
+需要在 OpenClaw 后端实际创建对应 agent，前端账号和后端 agent 才能对应。
+
+## 操作手册
+
+完整操作说明见：
+
+[USER_MANUAL.md](USER_MANUAL.md)
