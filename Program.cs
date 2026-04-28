@@ -1,5 +1,6 @@
 using OpenclawChat.Services;
 using OpenclawChat.Models;
+using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -7,6 +8,8 @@ builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.Configure<OpenclawConnectionOptions>(builder.Configuration.GetSection("OpenclawConnection"));
 builder.Services.AddScoped<OpenclawWsClient>();
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, ".data-protection-keys")));
 
 var dbPath = builder.Configuration["UserStore:DatabasePath"]
     ?? Path.Combine(AppContext.BaseDirectory, "openclaw-chat.db");

@@ -31,10 +31,10 @@
             <label>网关地址</label>
             <input @bind="_connection.Endpoint" placeholder="ws://localhost:3000/ws" disabled="@(_connected || !Auth.IsAdmin)" />
 
-            <label>会话标识 (Agent)</label>
+            <label>会话标识</label>
             @if (Auth.IsAdmin)
             {
-                <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync" disabled="@_connected">
+                <select value="@_connection.SessionKey" @onchange="OnSessionChangedAsync" disabled="@IsBusy">
                     @foreach (var sessionKey in _sessionKeys)
                     {
                         <option value="@sessionKey">@sessionKey</option>
@@ -59,11 +59,6 @@
             }
 
             <label class="check-row">
-                <input type="checkbox" @bind="_useStreaming" />
-                <span>启用前端流式动画</span>
-            </label>
-
-            <label class="check-row">
                 <input type="checkbox" @bind="_showThinking" @bind:after="OnDisplayToggleChanged" />
                 <span>显示思考</span>
             </label>
@@ -80,6 +75,7 @@
             <button class="ghost" @onclick="NewSessionAsync" disabled="@(!_connected || IsBusy)">新会话</button>
             @if (Auth.IsAdmin)
             {
+                <button class="ghost" @onclick="RefreshSessionsAsync" disabled="@(!_connected || _loadingSessions || IsBusy)">@(_loadingSessions ? "会话加载中..." : "刷新会话")</button>
                 <button class="ghost" @onclick="OpenUserMgmt">用户管理</button>
             }
         </div>

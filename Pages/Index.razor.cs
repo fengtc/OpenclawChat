@@ -60,7 +60,7 @@ public partial class Index : ComponentBase, IDisposable
     private readonly List<string> _toolStreamOrder = [];
     private readonly HashSet<string> _refreshSessionsAfterChat = [];
     private readonly List<ChatAttachment> _attachments = [];
-    private readonly List<string> _sessionKeys = ["main"];
+    private readonly List<string> _sessionKeys = [];
     private bool _loadingSessions;
     private int _requestRoundCounter;
     private int? _activeWaitingRound;
@@ -81,7 +81,6 @@ public partial class Index : ComponentBase, IDisposable
     private string? _chatThinkingLevel;
     private bool _showThinking = true;
     private bool _showToolStream = true;
-    private bool _useStreaming = true;
     private bool _showToken;
     private bool _showPassword;
     // 启用网关 chat/agent 事件的真流式：以 sessionKey 匹配，通过 chat.state="final" 信号结束。
@@ -708,7 +707,7 @@ public partial class Index : ComponentBase, IDisposable
 
         var runId = Guid.NewGuid().ToString("N");
         TaskCompletionSource<string>? completionTcs = null;
-        if (_useGatewayEventStreaming && _useStreaming)
+        if (_useGatewayEventStreaming)
         {
             _chatRunId = runId;
             _chatStream = string.Empty;
@@ -743,14 +742,14 @@ public partial class Index : ComponentBase, IDisposable
                 runId,
                 apiAttachments);
 
-            if (_useGatewayEventStreaming && _useStreaming && !string.IsNullOrWhiteSpace(ack?.RunId))
+            if (_useGatewayEventStreaming && !string.IsNullOrWhiteSpace(ack?.RunId))
             {
                 _chatRunId = ack.RunId;
             }
 
             var found = completionTcs is not null
                 ? await WaitForGatewayStreamingReplyAsync(now, completionTcs)
-                : await WaitForAssistantReplyViaHistoryAsync(now, animateText: _useStreaming);
+                : await WaitForAssistantReplyViaHistoryAsync(now);
 
             if (!found && string.IsNullOrWhiteSpace(_error))
             {
@@ -806,7 +805,6 @@ public partial class Index : ComponentBase, IDisposable
         var completionTask = completionTcs.Task;
         var historyTask = WaitForAssistantReplyViaHistoryAsync(
             requestStartedAt,
-            animateText: false,
             historyCts.Token);
         var timeoutTask = Task.Delay(NonStreamingHistoryTimeout);
 
@@ -844,7 +842,6 @@ public partial class Index : ComponentBase, IDisposable
 
     private async Task<bool> WaitForAssistantReplyViaHistoryAsync(
         long requestStartedAt,
-        bool animateText,
         CancellationToken cancellationToken = default)
     {
         var deadline = DateTimeOffset.UtcNow + NonStreamingHistoryTimeout;
@@ -933,14 +930,7 @@ public partial class Index : ComponentBase, IDisposable
                         continue;
                     }
 
-                    if (animateText)
-                    {
-                        await AnimateAssistantMessageAsync(candidate);
-                    }
-                    else
-                    {
-                        _chatMessages.Add(candidate);
-                    }
+                    _chatMessages.Add(candidate);
 
                     _lastSeenAssistantTs = Math.Max(_lastSeenAssistantTs, candidateTs);
                     return true;
@@ -966,54 +956,6 @@ public partial class Index : ComponentBase, IDisposable
         // 这样下一轮发问时，迟到的本轮回复不会被错误地当成新回复显示。
         _lastSeenAssistantTs = Math.Max(_lastSeenAssistantTs, maxSeenTs);
         return false;
-    }
-
-    private async Task AnimateAssistantMessageAsync(JsonObject message)
-    {
-        var fullText = ExtractText(message);
-        if (string.IsNullOrWhiteSpace(fullText))
-        {
-            _chatMessages.Add(message);
-            return;
-        }
-
-        var startedAt = NormalizeTimestamp(GetLong(message, "timestamp"));
-        var totalLength = fullText.Length;
-        var frames = Math.Clamp(totalLength, 12, 90);
-        var step = Math.Max(1, totalLength / frames);
-        var delayMs = totalLength switch
-        {
-            > 2000 => 10,
-            > 800 => 14,
-            > 200 => 20,
-            _ => 26,
-        };
-
-        _chatStreamStartedAt = startedAt;
-        _chatStream = string.Empty;
-        ScheduleAutoScroll();
-        StateHasChanged();
-
-        for (var i = 1; i <= totalLength; i += step)
-        {
-            var length = Math.Min(i, totalLength);
-            _chatStream = fullText[..length];
-            ScheduleAutoScroll();
-            StateHasChanged();
-            await Task.Delay(delayMs);
-        }
-
-        if (!string.Equals(_chatStream, fullText, StringComparison.Ordinal))
-        {
-            _chatStream = fullText;
-            ScheduleAutoScroll();
-            StateHasChanged();
-            await Task.Delay(40);
-        }
-
-        _chatStream = null;
-        _chatStreamStartedAt = null;
-        _chatMessages.Add(message);
     }
 
     private bool ContainsEquivalentAssistantMessage(JsonObject candidate)
