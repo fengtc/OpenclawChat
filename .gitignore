@@ -361,3 +361,10 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Local ASP.NET Core Data Protection keys. These protect cookies/tokens and must not be committed.
+.data-protection-keys/
+
+# Local .NET CLI home/cache directories created during sandboxed builds.
+.dotnet_cli/
+.dotnet_home/
