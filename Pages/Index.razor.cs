@@ -76,6 +76,10 @@ public partial class Index : ComponentBase, IDisposable
     private bool _connecting;
     private bool _autoConnectStarted;
     private bool _initialHistoryLoadStarted;
+    private bool _disposed;
+    private bool _suppressReconnect;
+    private int _reconnectAttempt;
+    private CancellationTokenSource? _reconnectCts;
     private bool _chatLoading;
     private bool _chatSending;
     private string _chatMessage = string.Empty;
@@ -285,6 +289,9 @@ public partial class Index : ComponentBase, IDisposable
 
     private async Task SignOut()
     {
+        _suppressReconnect = true;
+        CancelReconnect();
+
         if (_connected)
         {
             try
@@ -375,6 +382,11 @@ public partial class Index : ComponentBase, IDisposable
 
     private async Task ConnectAsync()
     {
+        if (_connecting || _disposed)
+        {
+            return;
+        }
+
         _connecting = true;
         _error = null;
 
@@ -387,6 +399,7 @@ public partial class Index : ComponentBase, IDisposable
             await ChatClient.ConnectAsync(_connection);
             _connected = true;
             _initialHistoryLoadStarted = true;
+            _reconnectAttempt = 0;
             EnsureSessionKeyOption(_connection.SessionKey);
             await LoadSessionKeysAsync();
             ResetChatScroll();
@@ -401,6 +414,10 @@ public partial class Index : ComponentBase, IDisposable
         finally
         {
             _connecting = false;
+            if (!_connected && !_disposed && !_suppressReconnect && _autoConnectStarted)
+            {
+                ScheduleReconnect();
+            }
         }
     }
 
@@ -597,6 +614,12 @@ public partial class Index : ComponentBase, IDisposable
     private async Task SendAsync()
     {
         await SyncComposerValueAsync();
+        if (!_connected && !_connecting)
+        {
+            CancelReconnect();
+            await ConnectAsync();
+        }
+
         await HandleSendChatAsync();
     }
 
@@ -1206,7 +1229,17 @@ public partial class Index : ComponentBase, IDisposable
     {
         if (!_connected)
         {
-            return _connecting ? "正在连接网关..." : "网关未连接，请稍后再试...";
+            if (_connecting)
+            {
+                return "正在连接网关...";
+            }
+
+            if (_reconnectCts is not null)
+            {
+                return _status;
+            }
+
+            return "网关未连接，正在准备自动重连...";
         }
 
         if (_attachments.Count > 0)
@@ -1295,6 +1328,10 @@ public partial class Index : ComponentBase, IDisposable
         {
             // Keep the current bound value if the browser-side helper is unavailable.
         }
+        catch (OperationCanceledException)
+        {
+            // The Blazor circuit or JS call can be canceled during reconnects or large paste events.
+        }
     }
 
     private async Task PerformAutoScrollAsync(bool force, bool smooth)
@@ -1345,6 +1382,12 @@ public partial class Index : ComponentBase, IDisposable
         {
             _connected = args.Connected;
             _status = args.Message;
+            if (args.Connected)
+            {
+                CancelReconnect();
+                _reconnectAttempt = 0;
+            }
+
             if (!args.Connected)
             {
                 _chatRunId = null;
@@ -1353,10 +1396,93 @@ public partial class Index : ComponentBase, IDisposable
                 _waitingForAssistantReply = false;
                 _activeWaitingRound = null;
                 ResetToolStream();
+                ScheduleReconnect();
             }
 
             StateHasChanged();
         });
+    }
+
+    private void ScheduleReconnect()
+    {
+        if (_disposed || _suppressReconnect || !Auth.IsAuthenticated || _connecting)
+        {
+            return;
+        }
+
+        if (_reconnectCts is not null)
+        {
+            return;
+        }
+
+        var attempt = ++_reconnectAttempt;
+        var delay = TimeSpan.FromSeconds(Math.Min(30, attempt switch
+        {
+            <= 1 => 2,
+            2 => 5,
+            3 => 10,
+            _ => 30,
+        }));
+
+        _status = $"已断开，{delay.TotalSeconds:0} 秒后自动重连...";
+        _reconnectCts = new CancellationTokenSource();
+        var token = _reconnectCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, token);
+                await InvokeAsync(async () =>
+                {
+                    _reconnectCts?.Dispose();
+                    _reconnectCts = null;
+
+                    if (_disposed || token.IsCancellationRequested || _connected || _connecting)
+                    {
+                        return;
+                    }
+
+                    await ConnectAsync();
+                    if (_connected)
+                    {
+                        ScheduleComposerFocus();
+                        StateHasChanged();
+                        return;
+                    }
+
+                    ScheduleReconnect();
+                    StateHasChanged();
+                });
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                await InvokeAsync(() =>
+                {
+                    _reconnectCts?.Dispose();
+                    _reconnectCts = null;
+                    _error = $"自动重连失败：{ex.Message}";
+                    ScheduleReconnect();
+                    StateHasChanged();
+                });
+            }
+        }, token);
+    }
+
+    private void CancelReconnect()
+    {
+        var cts = _reconnectCts;
+        _reconnectCts = null;
+        if (cts is null)
+        {
+            return;
+        }
+
+        cts.Cancel();
+        cts.Dispose();
     }
 
     private void OnEventGapDetected(object? sender, EventGapDetectedEventArgs args)
@@ -3117,6 +3243,10 @@ public partial class Index : ComponentBase, IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        _suppressReconnect = true;
+        CancelReconnect();
+
         ChatClient.ConnectionStateChanged -= OnConnectionStateChanged;
         ChatClient.EventGapDetected -= OnEventGapDetected;
         ChatClient.ChatEventReceived -= OnChatEventReceived;

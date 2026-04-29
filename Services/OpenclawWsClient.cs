@@ -12,6 +12,7 @@ public sealed class OpenclawWsClient : IAsyncDisposable
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ChallengeWaitTimeout = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan WebSocketKeepAliveInterval = TimeSpan.FromSeconds(20);
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -62,6 +63,7 @@ public sealed class OpenclawWsClient : IAsyncDisposable
         SetConnectionState(false, "连接中...");
 
         var socket = new ClientWebSocket();
+        socket.Options.KeepAliveInterval = WebSocketKeepAliveInterval;
         var originHeader = ResolveOriginHeader(options);
         if (!string.IsNullOrWhiteSpace(originHeader))
         {

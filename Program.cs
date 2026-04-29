@@ -5,7 +5,11 @@ using Microsoft.AspNetCore.DataProtection;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
+builder.Services.AddServerSideBlazor()
+    .AddHubOptions(options =>
+    {
+        options.MaximumReceiveMessageSize = 2 * 1024 * 1024;
+    });
 builder.Services.Configure<OpenclawConnectionOptions>(builder.Configuration.GetSection("OpenclawConnection"));
 builder.Services.AddScoped<OpenclawWsClient>();
 builder.Services.AddDataProtection()
