@@ -1,12 +1,12 @@
 # OpenClaw Chat
 
-OpenClaw Chat 是一个基于 Blazor Server 的 OpenClaw 网页聊天客户端，直接连接 OpenClaw Gateway WebSocket，提供登录、多用户、会话历史、后端真流式输出、工具流展示和 Markdown 渲染。
+OpenClaw Chat 是一个基于 Blazor Server 的 OpenClaw 网页聊天客户端，直接连接 OpenClaw Gateway WebSocket，提供登录、多用户、会话历史、后端流式回复、工具流展示和 Markdown 渲染。
 
 ## 主要能力
 
 - 登录后自动连接网关，无需手动点击连接。
 - 默认进入当前用户 Agent 的主会话，例如 `agent:main:main`、`agent:qq:main`。
-- 支持 OpenClaw 后端真流式输出，按 `chat` / `agent` 事件实时更新。
+- 助手正文默认使用 OpenClaw 后端流式事件；`chat.history` 只作为延迟兜底。
 - 支持会话历史读取，调用后端 `chat.history`，当前页面默认拉取最近 200 条。
 - 支持按日期、关键词筛选会话标识。
 - 管理员可查看全部会话；普通用户只能查看自己 Agent 下的会话。
@@ -94,7 +94,7 @@ Data Protection 密钥保存在项目目录：
 - RPC：`sessions.list`、`chat.history`、`chat.send`、`chat.abort`
 - 事件：`chat`、`agent`
 
-流式输出优先使用后端事件：
+助手正文默认使用后端流式事件：
 
 - `agent` 事件中的 `stream=assistant`
 - `chat` 事件中的 `state=delta/final/aborted/error`
@@ -104,6 +104,8 @@ Data Protection 密钥保存在项目目录：
 ```text
 chat.history
 ```
+
+为了避免重复显示，历史兜底不会和正在进行的流式正文同时抢渲染；只有在短时间内没有收到正文流式内容时才启用。
 
 ## 会话规则
 

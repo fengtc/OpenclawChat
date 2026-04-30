@@ -24,8 +24,12 @@ public partial class Index : ComponentBase, IDisposable
     private const int ToolOutputCharLimit = 120_000;
     private const int CompactionToastDurationMs = 5_000;
     private const int FallbackToastDurationMs = 8_000;
+    private const int FakeStreamingDelayMs = 18;
     private static readonly TimeSpan NonStreamingHistoryTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan NonStreamingHistoryPollInterval = TimeSpan.FromMilliseconds(800);
+    private static readonly TimeSpan StreamingHistoryFallbackDelay = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan GatewayStartupRetryDelay = TimeSpan.FromSeconds(2);
+    private const int GatewayStartupRetryCount = 6;
 
     private static readonly Regex SilentReplyRegex = new("^\\s*NO_REPLY\\s*$", RegexOptions.Compiled);
     private static readonly Regex InviteUsernameFilterRegex = new("[^A-Za-z0-9_\\-]", RegexOptions.Compiled);
@@ -91,8 +95,9 @@ public partial class Index : ComponentBase, IDisposable
     private bool _showToolStream = true;
     private bool _showToken;
     private bool _showPassword;
-    // 启用网关 chat/agent 事件的真流式：以 sessionKey 匹配，通过 chat.state="final" 信号结束。
+    // 正文默认使用后端真流式；历史查询只作为延迟兜底，避免和流式事件抢渲染。
     private readonly bool _useGatewayEventStreaming = true;
+    private readonly bool _useFrontendFakeStreaming = false;
     private TaskCompletionSource<string>? _runCompletionTcs;
 
     private void OnDisplayToggleChanged()
@@ -514,7 +519,9 @@ public partial class Index : ComponentBase, IDisposable
 
         try
         {
-            var keys = await ChatClient.ListSessionKeysAsync();
+            var keys = await ExecuteWithGatewayStartupRetryAsync(
+                () => ChatClient.ListSessionKeysAsync(),
+                "会话列表");
             foreach (var key in keys)
             {
                 if (Auth.IsAdmin || IsSessionAllowedForCurrentUser(key))
@@ -559,7 +566,9 @@ public partial class Index : ComponentBase, IDisposable
 
         try
         {
-            var response = await ChatClient.GetHistoryAsync(_connection.SessionKey, limit: 200);
+            var response = await ExecuteWithGatewayStartupRetryAsync(
+                () => ChatClient.GetHistoryAsync(_connection.SessionKey, limit: 200),
+                "会话历史");
             EnsureSessionKeyOption(_connection.SessionKey);
             EnsureSessionKeyOption(response?.SessionKey);
             _chatMessages.Clear();
@@ -815,7 +824,7 @@ public partial class Index : ComponentBase, IDisposable
         }
         else
         {
-            _chatRunId = null;
+            _chatRunId = runId;
             _chatStream = null;
             _chatStreamStartedAt = null;
             _runCompletionTcs = null;
@@ -840,7 +849,7 @@ public partial class Index : ComponentBase, IDisposable
                 runId,
                 apiAttachments);
 
-            if (_useGatewayEventStreaming && !string.IsNullOrWhiteSpace(ack?.RunId))
+            if (!string.IsNullOrWhiteSpace(ack?.RunId))
             {
                 _chatRunId = ack.RunId;
             }
@@ -895,32 +904,89 @@ public partial class Index : ComponentBase, IDisposable
         }
     }
 
+    private async Task<T> ExecuteWithGatewayStartupRetryAsync<T>(Func<Task<T>> action, string operationName)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await action();
+            }
+            catch (GatewayRequestException ex) when (IsGatewayStartupUnavailable(ex) && attempt <= GatewayStartupRetryCount)
+            {
+                _status = $"网关启动中，正在重试{operationName}（{attempt}/{GatewayStartupRetryCount}）...";
+                StateHasChanged();
+                await Task.Delay(GatewayStartupRetryDelay);
+            }
+        }
+    }
+
+    private static bool IsGatewayStartupUnavailable(GatewayRequestException ex)
+    {
+        return string.Equals(ex.Code, "UNAVAILABLE", StringComparison.OrdinalIgnoreCase)
+            && ex.Message.Contains("gateway startup", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task<bool> WaitForGatewayStreamingReplyAsync(
         long requestStartedAt,
         TaskCompletionSource<string> completionTcs)
     {
-        using var historyCts = new CancellationTokenSource();
         var completionTask = completionTcs.Task;
-        var historyTask = WaitForAssistantReplyViaHistoryAsync(
-            requestStartedAt,
-            historyCts.Token);
+        var fallbackDelayTask = Task.Delay(StreamingHistoryFallbackDelay);
         var timeoutTask = Task.Delay(NonStreamingHistoryTimeout);
 
-        var winner = await Task.WhenAny(completionTask, historyTask, timeoutTask);
+        var winner = await Task.WhenAny(completionTask, fallbackDelayTask, timeoutTask);
 
         if (winner == completionTask)
         {
-            historyCts.Cancel();
             var endState = await completionTask;
             return endState is "final" or "aborted";
         }
 
-        if (winner == historyTask)
+        if (winner == fallbackDelayTask && !string.IsNullOrWhiteSpace(_chatStream))
         {
-            return await historyTask;
+            winner = await Task.WhenAny(completionTask, timeoutTask);
+            if (winner == completionTask)
+            {
+                var endState = await completionTask;
+                return endState is "final" or "aborted";
+            }
+        }
+        else if (winner == fallbackDelayTask)
+        {
+            using var historyCts = new CancellationTokenSource();
+            var historyTask = WaitForAssistantReplyViaHistoryAsync(
+                requestStartedAt,
+                historyCts.Token,
+                stopIfStreamingStarts: true);
+
+            winner = await Task.WhenAny(completionTask, historyTask, timeoutTask);
+            if (winner == completionTask)
+            {
+                historyCts.Cancel();
+                var endState = await completionTask;
+                return endState is "final" or "aborted";
+            }
+
+            if (winner == historyTask)
+            {
+                var foundViaHistory = await historyTask;
+                if (foundViaHistory || string.IsNullOrWhiteSpace(_chatStream))
+                {
+                    return foundViaHistory;
+                }
+
+                winner = await Task.WhenAny(completionTask, timeoutTask);
+                if (winner == completionTask)
+                {
+                    var endState = await completionTask;
+                    return endState is "final" or "aborted";
+                }
+            }
+
+            historyCts.Cancel();
         }
 
-        historyCts.Cancel();
         if (!string.IsNullOrWhiteSpace(_chatStream) && !IsSilentReply(_chatStream))
         {
             var message = BuildAssistantTextMessage(_chatStream);
@@ -940,7 +1006,8 @@ public partial class Index : ComponentBase, IDisposable
 
     private async Task<bool> WaitForAssistantReplyViaHistoryAsync(
         long requestStartedAt,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool stopIfStreamingStarts = false)
     {
         var deadline = DateTimeOffset.UtcNow + NonStreamingHistoryTimeout;
         var skewBound = requestStartedAt - 120_000;
@@ -950,6 +1017,11 @@ public partial class Index : ComponentBase, IDisposable
 
         while (DateTimeOffset.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
         {
+            if (stopIfStreamingStarts && !string.IsNullOrWhiteSpace(_chatStream))
+            {
+                return false;
+            }
+
             ChatHistoryResponse? response;
             try
             {
@@ -1013,6 +1085,11 @@ public partial class Index : ComponentBase, IDisposable
 
                 if (candidate is not null)
                 {
+                    if (stopIfStreamingStarts && !string.IsNullOrWhiteSpace(_chatStream))
+                    {
+                        return false;
+                    }
+
                     if (ContainsEquivalentAssistantMessage(candidate))
                     {
                         // Still seeing a previously rendered assistant message; keep polling for a new one.
@@ -1028,7 +1105,10 @@ public partial class Index : ComponentBase, IDisposable
                         continue;
                     }
 
-                    _chatMessages.Add(candidate);
+                    await AddAssistantMessageWithOptionalFakeStreamingAsync(
+                        candidate,
+                        candidateTs,
+                        cancellationToken);
 
                     _lastSeenAssistantTs = Math.Max(_lastSeenAssistantTs, candidateTs);
                     return true;
@@ -1090,6 +1170,81 @@ public partial class Index : ComponentBase, IDisposable
         return _chatMessages.Any((existing) =>
             string.Equals(GetRole(existing), "assistant", StringComparison.OrdinalIgnoreCase)
             && string.Equals(ExtractText(existing), candidateText, StringComparison.Ordinal));
+    }
+
+    private async Task AddAssistantMessageWithOptionalFakeStreamingAsync(
+        JsonObject candidate,
+        long candidateTs,
+        CancellationToken cancellationToken)
+    {
+        if (!_useFrontendFakeStreaming)
+        {
+            _chatMessages.Add(candidate);
+            return;
+        }
+
+        var text = ExtractText(candidate);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            _chatMessages.Add(candidate);
+            return;
+        }
+
+        _chatStream = string.Empty;
+        _chatStreamStartedAt = candidateTs > 0
+            ? candidateTs
+            : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        ScheduleAutoScroll();
+        await InvokeAsync(StateHasChanged);
+
+        var chunkSize = GetFakeStreamingChunkSize(text.Length);
+        for (var i = 0; i < text.Length; i += chunkSize)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var nextLength = Math.Min(text.Length, i + chunkSize);
+            _chatStream = text[..nextLength];
+            ScheduleAutoScroll();
+            await InvokeAsync(StateHasChanged);
+
+            try
+            {
+                await Task.Delay(FakeStreamingDelayMs, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+
+        _chatStream = null;
+        _chatStreamStartedAt = null;
+        _chatMessages.Add(candidate);
+        ScheduleAutoScroll();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static int GetFakeStreamingChunkSize(int textLength)
+    {
+        if (textLength <= 240)
+        {
+            return 3;
+        }
+
+        if (textLength <= 1_200)
+        {
+            return 8;
+        }
+
+        if (textLength <= 4_000)
+        {
+            return 18;
+        }
+
+        return 36;
     }
 
     private async Task AbortAsync()
@@ -1545,6 +1700,11 @@ public partial class Index : ComponentBase, IDisposable
             return null;
         }
 
+        if (!_useGatewayEventStreaming)
+        {
+            return null;
+        }
+
         // 首个包含 runId 的事件采纳为本轮 run。
         if (!string.IsNullOrWhiteSpace(payload.RunId) && string.IsNullOrWhiteSpace(_chatRunId))
         {
@@ -1553,6 +1713,11 @@ public partial class Index : ComponentBase, IDisposable
 
         if (payload.State == "delta")
         {
+            if (!IsExpectingAssistantStream())
+            {
+                return null;
+            }
+
             var next = ExtractText(payload.Message);
             if (!string.IsNullOrWhiteSpace(next) && !IsSilentReply(next))
             {
@@ -1585,7 +1750,11 @@ public partial class Index : ComponentBase, IDisposable
             }
             else if (!string.IsNullOrWhiteSpace(_chatStream) && !IsSilentReply(_chatStream))
             {
-                _chatMessages.Add(BuildAssistantTextMessage(_chatStream));
+                var streamMessage = BuildAssistantTextMessage(_chatStream);
+                if (!ContainsEquivalentAssistantText(streamMessage))
+                {
+                    _chatMessages.Add(streamMessage);
+                }
             }
 
             _chatStream = null;
@@ -1613,7 +1782,11 @@ public partial class Index : ComponentBase, IDisposable
             }
             else if (!string.IsNullOrWhiteSpace(_chatStream) && !IsSilentReply(_chatStream))
             {
-                _chatMessages.Add(BuildAssistantTextMessage(_chatStream));
+                var streamMessage = BuildAssistantTextMessage(_chatStream);
+                if (!ContainsEquivalentAssistantText(streamMessage))
+                {
+                    _chatMessages.Add(streamMessage);
+                }
             }
 
             _chatStream = null;
@@ -1788,8 +1961,18 @@ public partial class Index : ComponentBase, IDisposable
 
     private void HandleAssistantStreamEvent(GatewayAgentEventPayload payload)
     {
+        if (!_useGatewayEventStreaming)
+        {
+            return;
+        }
+
         // 仅处理当前会话的事件。
         if (!IsCurrentSessionEvent(payload.SessionKey))
+        {
+            return;
+        }
+
+        if (!IsExpectingAssistantStream())
         {
             return;
         }
@@ -1835,6 +2018,13 @@ public partial class Index : ComponentBase, IDisposable
             _chatStream = text;
             ScheduleAutoScroll();
         }
+    }
+
+    private bool IsExpectingAssistantStream()
+    {
+        return _waitingForAssistantReply
+            || _runCompletionTcs is not null
+            || _chatStream is not null;
     }
 
     private void HandleCompactionEvent(GatewayAgentEventPayload payload)
