@@ -25,7 +25,7 @@ public partial class Index : ComponentBase, IDisposable
     private const int CompactionToastDurationMs = 5_000;
     private const int FallbackToastDurationMs = 8_000;
     private const int FakeStreamingDelayMs = 18;
-    private static readonly TimeSpan NonStreamingHistoryTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan NonStreamingHistoryTimeout = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan NonStreamingHistoryPollInterval = TimeSpan.FromMilliseconds(800);
     private static readonly TimeSpan StreamingHistoryFallbackDelay = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan GatewayStartupRetryDelay = TimeSpan.FromSeconds(2);
@@ -843,11 +843,19 @@ public partial class Index : ComponentBase, IDisposable
 
         try
         {
-            var ack = await ChatClient.SendChatAsync(
-                _connection.SessionKey,
-                trimmed,
-                runId,
-                apiAttachments);
+            ChatSendAck? ack = null;
+            try
+            {
+                ack = await ChatClient.SendChatAsync(
+                    _connection.SessionKey,
+                    trimmed,
+                    runId,
+                    apiAttachments);
+            }
+            catch (TimeoutException) when (_useGatewayEventStreaming)
+            {
+                _status = "chat.send 响应超时，继续等待流式回复...";
+            }
 
             if (!string.IsNullOrWhiteSpace(ack?.RunId))
             {

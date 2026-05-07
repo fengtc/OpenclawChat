@@ -11,6 +11,7 @@ namespace OpenclawChat.Services;
 public sealed class OpenclawWsClient : IAsyncDisposable
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ChatSendRequestTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ChallengeWaitTimeout = TimeSpan.FromMilliseconds(750);
     private static readonly TimeSpan WebSocketKeepAliveInterval = TimeSpan.FromSeconds(20);
 
@@ -211,7 +212,8 @@ public sealed class OpenclawWsClient : IAsyncDisposable
                 idempotencyKey,
                 attachments = attachments?.Count > 0 ? attachments : null,
             },
-            cancellationToken);
+            cancellationToken,
+            ChatSendRequestTimeout);
     }
 
     public Task<ChatAbortAck?> AbortChatAsync(
@@ -402,9 +404,13 @@ public sealed class OpenclawWsClient : IAsyncDisposable
         }
     }
 
-    private async Task<T?> InvokeMethodAsync<T>(string method, object? methodParams, CancellationToken cancellationToken)
+    private async Task<T?> InvokeMethodAsync<T>(
+        string method,
+        object? methodParams,
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null)
     {
-        var payload = await InvokeMethodRawAsync(method, methodParams, cancellationToken);
+        var payload = await InvokeMethodRawAsync(method, methodParams, cancellationToken, requestTimeout);
         if (payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
         {
             return default;
@@ -413,7 +419,11 @@ public sealed class OpenclawWsClient : IAsyncDisposable
         return payload.Deserialize<T>(_jsonOptions);
     }
 
-    private async Task<JsonElement> InvokeMethodRawAsync(string method, object? methodParams, CancellationToken cancellationToken)
+    private async Task<JsonElement> InvokeMethodRawAsync(
+        string method,
+        object? methodParams,
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null)
     {
         ThrowIfDisposed();
 
@@ -440,14 +450,15 @@ public sealed class OpenclawWsClient : IAsyncDisposable
             },
             cancellationToken);
 
+        var timeout = requestTimeout ?? RequestTimeout;
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(RequestTimeout);
+        timeoutCts.CancelAfter(timeout);
 
         using var registration = timeoutCts.Token.Register(() =>
         {
             if (_pending.TryRemove(requestId, out var pending))
             {
-                pending.TrySetException(new TimeoutException($"'{method}' 请求超时（{RequestTimeout.TotalSeconds:0} 秒）。"));
+                pending.TrySetException(new TimeoutException($"'{method}' 请求超时（{timeout.TotalSeconds:0} 秒）。"));
             }
         });
 
